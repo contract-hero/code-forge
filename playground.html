@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Code Forge v2 — Flow & Agent Hierarchy</title>
+<style>
+  :root {
+    --bg: #0c0c0e;
+    --panel: #15161a;
+    --panel-2: #1c1d23;
+    --border: #2a2c33;
+    --border-2: #3a3d46;
+    --fg: #e8e9ec;
+    --muted: #8b8e97;
+    --accent: #6ea8fe;
+    --accent-strong: #4d8efc;
+    --good: #5cc8a4;
+    --warn: #d4a35c;
+    --bad: #e5736b;
+    --phase-pre: #2b3a55;
+    --phase-cycle: #3b2b4d;
+    --agent: #243a32;
+    --reviewer: #2b3d24;
+    --script: #4d3a1f;
+    --hook: #4d2424;
+    --shadow: 0 8px 24px rgba(0,0,0,0.45);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; height: 100%; overflow: hidden; }
+  .app { display: grid; grid-template-columns: 320px 1fr; grid-template-rows: 1fr auto; height: 100vh; gap: 0; }
+  .sidebar { grid-row: 1 / span 2; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+  .sidebar header { padding: 16px 18px 12px; border-bottom: 1px solid var(--border); }
+  .sidebar h1 { font-size: 16px; margin: 0 0 2px; letter-spacing: -0.01em; }
+  .sidebar h1 small { color: var(--muted); font-weight: 400; font-size: 11px; }
+  .sidebar p { color: var(--muted); font-size: 12px; margin: 4px 0 0; line-height: 1.4; }
+  .group { padding: 14px 18px; border-bottom: 1px solid var(--border); }
+  .group h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  .preset-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .preset { background: var(--panel-2); color: var(--fg); border: 1px solid var(--border-2); padding: 7px 9px; border-radius: 6px; cursor: pointer; font-size: 12px; text-align: left; transition: background .12s; }
+  .preset:hover { background: #24262d; }
+  .preset.active { background: var(--accent-strong); border-color: var(--accent-strong); color: #fff; }
+  .check { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; cursor: pointer; user-select: none; }
+  .check input { accent-color: var(--accent); margin: 0; }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; border: 1px solid var(--border-2); }
+  .comments { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 18px; }
+  .comments h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; font-weight: 600; display: flex; align-items: center; justify-content: space-between; }
+  .comments h2 .badge { background: var(--accent-strong); color: #fff; padding: 2px 7px; border-radius: 10px; font-size: 10px; letter-spacing: 0; text-transform: none; }
+  .comment-item { background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; font-size: 12px; }
+  .comment-target { color: var(--accent); font-weight: 600; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; }
+  .comment-text { color: var(--fg); margin: 4px 0 6px; line-height: 1.4; white-space: pre-wrap; }
+  .comment-del { background: transparent; color: var(--muted); border: 1px solid var(--border-2); padding: 2px 7px; border-radius: 4px; cursor: pointer; font-size: 10px; }
+  .comment-del:hover { color: var(--bad); border-color: var(--bad); }
+  .empty-state { color: var(--muted); font-size: 12px; font-style: italic; }
+
+  .canvas-wrap { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .canvas { flex: 1; position: relative; overflow: auto; background: radial-gradient(circle at 30% 20%, #131419 0%, #0c0c0e 60%); }
+  /* Explicit pixel sizing so the canvas scrollbars actually trigger when the
+     window is narrower than the diagram. Using width/height attrs on <svg>
+     also works; CSS makes it easier to tune later. */
+  svg { display: block; width: 1400px; height: 820px; }
+  /* Friendlier scrollbars on macOS so the user can see them */
+  .canvas::-webkit-scrollbar { height: 12px; width: 12px; }
+  .canvas::-webkit-scrollbar-track { background: #0c0c0e; }
+  .canvas::-webkit-scrollbar-thumb { background: #2a2c33; border-radius: 6px; }
+  .canvas::-webkit-scrollbar-thumb:hover { background: #3a3d46; }
+  .canvas::-webkit-scrollbar-corner { background: #0c0c0e; }
+  .node { cursor: pointer; transition: filter .12s, transform .12s; }
+  .node:hover { filter: brightness(1.25); }
+  .node.commented .node-bg { stroke: var(--accent); stroke-width: 2.5; filter: drop-shadow(0 0 6px var(--accent)); }
+  .node-label { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; fill: var(--fg); pointer-events: none; }
+  .node-sub { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; font-size: 9.5px; fill: var(--muted); pointer-events: none; }
+  .node-badge { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 9px; fill: var(--bg); }
+  .lane-label { font-family: -apple-system, system-ui, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; fill: var(--muted); }
+  .lane-bg { fill: rgba(255,255,255,0.012); stroke: rgba(255,255,255,0.04); stroke-dasharray: 2,4; }
+  .legend { position: absolute; bottom: 10px; left: 10px; background: rgba(15,16,20,0.92); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 11px; color: var(--muted); backdrop-filter: blur(6px); }
+  .legend-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+  .legend-line { width: 22px; height: 0; border-top: 2px solid var(--accent); }
+
+  .promptbar { background: var(--panel); border-top: 1px solid var(--border); padding: 12px 16px; display: flex; gap: 12px; align-items: stretch; min-height: 90px; }
+  .prompt-box { flex: 1; background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 8px; padding: 10px 12px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--fg); white-space: pre-wrap; overflow-y: auto; max-height: 180px; line-height: 1.5; }
+  .copy-btn { background: var(--accent-strong); color: #fff; border: none; padding: 0 18px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600; height: 100%; min-width: 110px; transition: background .12s; }
+  .copy-btn:hover { background: #5d99fc; }
+  .copy-btn.copied { background: var(--good); }
+
+  /* Modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(2px); }
+  .modal-bg.show { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--border-2); border-radius: 10px; padding: 18px 20px; width: 460px; max-width: 92vw; box-shadow: var(--shadow); }
+  .modal-title { font-size: 13px; font-weight: 600; margin: 0 0 4px; }
+  .modal-target { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; color: var(--accent); margin-bottom: 12px; }
+  .modal-meta { background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 6px; padding: 8px 10px; font-size: 11px; color: var(--muted); margin-bottom: 12px; line-height: 1.5; }
+  .modal-meta-row { margin: 3px 0; }
+  .modal-meta-row strong { color: var(--fg); font-weight: 600; }
+  .modal textarea { width: 100%; min-height: 90px; resize: vertical; background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 6px; padding: 8px 10px; color: var(--fg); font-family: inherit; font-size: 12px; line-height: 1.4; }
+  .modal textarea:focus { outline: none; border-color: var(--accent); }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+  .modal-btn { background: var(--panel-2); color: var(--fg); border: 1px solid var(--border-2); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+  .modal-btn.primary { background: var(--accent-strong); color: #fff; border-color: var(--accent-strong); }
+  .modal-btn.primary:hover { background: #5d99fc; }
+  .modal-btn.danger { color: var(--bad); border-color: rgba(229,115,107,0.4); }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <header>
+      <h1>Code Forge v2 <small>0.2.0 design</small></h1>
+      <p>Flow + agent hierarchy explorer. v0.2.0 amendments: claudex Phase 0, e2e-as-glue, best-of-N implementer, specialist routing. Click any node to comment.</p>
+    </header>
+
+    <div class="group">
+      <h2>Preset views</h2>
+      <div class="preset-row" id="presets"></div>
+    </div>
+
+    <div class="group">
+      <h2>Layers</h2>
+      <div id="layer-toggles"></div>
+    </div>
+
+    <div class="group">
+      <h2>Connections</h2>
+      <div id="conn-toggles"></div>
+    </div>
+
+    <div class="comments">
+      <h2>Comments <span class="badge" id="cmt-count">0</span></h2>
+      <div id="comment-list"></div>
+    </div>
+  </aside>
+
+  <div class="canvas-wrap">
+    <div class="canvas">
+      <svg id="diagram" viewBox="0 0 1400 820" width="1400" height="820" preserveAspectRatio="xMinYMin meet" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrow-blue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+            <polygon points="0 0, 8 4, 0 8" fill="#6ea8fe"/>
+          </marker>
+          <marker id="arrow-green" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+            <polygon points="0 0, 8 4, 0 8" fill="#5cc8a4"/>
+          </marker>
+          <marker id="arrow-orange" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+            <polygon points="0 0, 8 4, 0 8" fill="#d4a35c"/>
+          </marker>
+          <marker id="arrow-red" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+            <polygon points="0 0, 8 4, 0 8" fill="#e5736b"/>
+          </marker>
+          <marker id="arrow-gray" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+            <polygon points="0 0, 8 4, 0 8" fill="#8b8e97"/>
+          </marker>
+        </defs>
+
+        <g id="lanes"></g>
+        <g id="connections"></g>
+        <g id="nodes"></g>
+      </svg>
+      <div class="legend">
+        <div class="legend-row"><span class="legend-line" style="border-color:#6ea8fe"></span> phase order</div>
+        <div class="legend-row"><span class="legend-line" style="border-color:#5cc8a4; border-style:dashed"></span> agent owns phase</div>
+        <div class="legend-row"><span class="legend-line" style="border-color:#d4a35c; border-style:dashed"></span> script gates phase</div>
+        <div class="legend-row"><span class="legend-line" style="border-color:#e5736b; border-style:dotted"></span> hook blocks</div>
+        <div class="legend-row"><span class="legend-line" style="border-color:#8b8e97; border-style:dotted"></span> writes artifact</div>
+      </div>
+    </div>
+
+    <div class="promptbar">
+      <div class="prompt-box" id="prompt"></div>
+      <button class="copy-btn" id="copy">Copy Prompt</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-bg">
+  <div class="modal">
+    <div class="modal-title" id="modal-title">Add a comment</div>
+    <div class="modal-target" id="modal-target"></div>
+    <div class="modal-meta" id="modal-meta"></div>
+    <textarea id="modal-input" placeholder="What do you want to say about this component? (questions, concerns, suggested changes…)"></textarea>
+    <div class="modal-actions">
+      <button class="modal-btn danger" id="modal-delete" style="display:none">Delete</button>
+      <button class="modal-btn" id="modal-cancel">Cancel</button>
+      <button class="modal-btn primary" id="modal-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+//
+// ---------------- DATA ----------------
+//
+
+const LAYERS = [
+  { id: 'pre',     label: 'Pre-cycle phases (3)',           on: true },
+  { id: 'cycle',   label: 'Per-cycle phases (5)',           on: true },
+  { id: 'post',    label: 'Post-cycles (Phase F: e2e)',     on: true },
+  { id: 'agent',   label: 'Stable agents',                  on: true },
+  { id: 'reviewer',label: 'Reviewers ×6 / Workers ×N',      on: true },
+  { id: 'script',  label: 'Scripts (gates)',                on: true },
+  { id: 'hook',    label: 'forge-guard hook',               on: true },
+];
+
+const LAYER_COLOR = {
+  pre: '#2b3a55',
+  cycle: '#3b2b4d',
+  post: '#4d3a55',
+  agent: '#243a32',
+  reviewer: '#2b3d24',
+  script: '#4d3a1f',
+  hook: '#4d2424',
+};
+
+const CONN_TYPES = [
+  { id: 'order',   label: 'Phase order',         color: '#6ea8fe', dash: '0',   on: true },
+  { id: 'owns',    label: 'Agent owns phase',    color: '#5cc8a4', dash: '6,4', on: true },
+  { id: 'gates',   label: 'Script gates phase',  color: '#d4a35c', dash: '4,4', on: true },
+  { id: 'blocks',  label: 'Hook blocks',         color: '#e5736b', dash: '2,4', on: true },
+  { id: 'writes',  label: 'Writes artifact',     color: '#8b8e97', dash: '1,4', on: false },
+];
+
+const LANES = [
+  { y:  20, h: 110, label: 'PRE-CYCLE PHASES (compressed 7→3 in v0.2.0)',  layer: 'pre' },
+  { y: 150, h: 110, label: 'PER-CYCLE PHASES (the v2 loop)',                layer: 'cycle' },
+  { y: 270, h: 110, label: 'POST-CYCLES — Phase F (e2e-review, v0.2.0)',    layer: 'post' },
+  { y: 400, h: 180, label: 'AGENTS',                                        layer: 'agent' },
+  { y: 595, h: 130, label: 'SCRIPTS (gates as code)',                       layer: 'script' },
+  { y: 740, h:  70, label: 'forge-guard.mjs HOOK RULES',                    layer: 'hook' },
+];
+
+const NODES = [
+  // ---- pre-cycle (compressed 7 → 3 in v0.2.0) ----
+  { id:'plan',          layer:'pre',  label:'Plan',           sub:'Phase 0 — claudex',           x:  60, y: 50, w:330, h: 70, info:{ owner:'forge-orchestrator + Codex (G1)', output:'.forge/plan.md', note:'Lazy prompt → Codex refines → Claude in plan mode → AskUserQuestion to clarify uncertainties → user-approved plan. Wraps codex-bridge:claudex skill. Replaces v1 intent + prompt-refine + exploration.' }},
+  { id:'spec-e2e',      layer:'pre',  label:'Spec & e2e',     sub:'Phase 1 (v0.2.0)',            x: 410, y: 50, w:330, h: 70, info:{ owner:'planner + Codex (G2.a + G2.b)', output:'.forge/spec.md (with ## E2E Tests), .forge/agent-config.md', note:'Two Codex iteration loops (cap 3 each):\nG2.a — does spec satisfy plan.md?\nG2.b — do e2e tests cover spec acceptance?\n\nThen: enumerates user\'s enabledPlugins, writes agent-config.md with TWO blocks:\n  • project_domains (top-level tag — sui-dapp etc. — forces sui-pilot for ALL Task calls regardless of file; role behavior via prompt injection)\n  • required_subagents (hard glob routing — sui-pilot for *.move and Move.toml; fallback when no project_domain set)\n  • recommended_agents (soft roster, favors sui-pilot / impeccable / superpowers/* per user preference; informs prompt composition when project_domain dispatches a fixed subagent)\n\nSui dApp project ⇒ every agent is sui-pilot, "on top of" the role-specific behavior carried in the prompt. Impeccable in a Sui dApp is prompt-injected design guidance, not a separate dispatch. Replaces v1 specification + spec-critique + agent-detection.' }},
+  { id:'cycle-plan',    layer:'pre',  label:'Cycle plan',     sub:'Phase 2',                      x: 760, y: 50, w:330, h: 70, info:{ owner:'forge-orchestrator + Codex', output:'.forge/cycle-plan.md', note:'Break spec into cycles. Each cycle entry references which e2e scenarios it brings online (stub/mock/real).' }},
+
+  // ---- per-cycle ----
+  { id:'contract',      layer:'cycle', label:'contract',          sub:'phase 1/5', x:  90, y:180, w:170, h: 60, info:{ owner:'planner',     output:'cycles/N/contract.md',         note:'Schema-validated. Required H2: Behavior, Files, Acceptance.' }},
+  { id:'test-list',     layer:'cycle', label:'test-list',         sub:'phase 2/5', x: 320, y:180, w:170, h: 60, info:{ owner:'test-author', output:'cycles/N/tests.json',          note:'Names + behaviors only. No assertions. Pruned by orchestrator.' }},
+  { id:'red',           layer:'cycle', label:'red',               sub:'phase 3/5', x: 550, y:180, w:170, h: 60, info:{ owner:'test-author', output:'cycles/N/red.log + red.json',  note:'Tests PROVEN to fail. cycle-tests-pass.sh INVERTS exit codes.' }},
+  { id:'green',         layer:'cycle', label:'green',             sub:'phase 4/5', x: 780, y:180, w:170, h: 60, info:{ owner:'implementer (Opus) + N workers (Sonnet)', output:'cycles/N/green/ (candidates/, synthesis-notes.md, green.log)', note:'v0.2.0: best-of-N. Coordinator dispatches IMPLEMENTERS=6 Sonnet workers; picks simplest passing candidate. forge-guard rule 5 blocks test-file edits for ALL agents in this phase.' }},
+  { id:'consolidated',  layer:'cycle', label:'consolidated-review', sub:'phase 5/5', x:1010, y:180, w:200, h: 60, info:{ owner:'reviewer ×6 + consolidator', output:'cycles/N/_consolidated.json + review.md', note:'Single-turn parallel fan-out. cycle-pass.sh is the gate.' }},
+
+  // ---- post-cycles (Phase F, v0.2.0) ----
+  { id:'e2e-scenarios', layer:'post', label:'e2e/scenarios.json', sub:'extracted from spec',   x:  90, y:300, w:220, h: 60, info:{ owner:'e2e-extract.sh', output:'.forge/e2e/scenarios.json', note:'Parsed from spec.md ## E2E Tests at the start of Phase F. Each scenario: id, name, steps, expected, tooling.' }},
+  { id:'phase-f',       layer:'post', label:'Phase F — e2e-review', sub:'reviewer ×scenarios + consolidator', x: 360, y:300, w:280, h: 60, info:{ owner:'reviewer ×N + consolidator (MODE=e2e)', output:'.forge/e2e/_consolidated.json + review.md', note:'Reviewer reused with MODE=e2e env var. One reviewer per scenario family. Failure spawns a remediation cycle (capped at 3).' }},
+  { id:'chrome-mcp',    layer:'post', label:'chrome-devtools-mcp', sub:'external MCP, frontend products',  x: 690, y:300, w:240, h: 60, info:{ role:'External MCP server. Drives Chrome to exercise UI scenarios. Reviewer agent invokes navigate/click/fill/wait_for/take_screenshot/evaluate_script as needed.', files:'plugin: chrome-devtools-mcp@claude-plugins-official' }},
+  { id:'e2e-pass',      layer:'post', label:'e2e/review.md', sub:'cycle-e2e-pass.sh gate',     x: 980, y:300, w:230, h: 60, info:{ owner:'consolidator', output:'.forge/e2e/review.md', note:'Final ship gate. Exit 0 iff: 0 critical clusters AND every scenario has ≥1 passing reviewer touch.' }},
+
+  // ---- agents ----
+  { id:'orchestrator',  layer:'agent', label:'forge-orchestrator', sub:'singleton, main session',     x:  20, y:420, w:200, h: 70, info:{ role:'Drives the cycle by invoking scripts. Does NOT reason about phase order.', constraint:'Cannot be a spawned subagent — needs Task tool.', files:'agents/forge-orchestrator.md' }},
+  { id:'planner',       layer:'agent', label:'planner',            sub:'1 per cycle, Codex G2',       x: 230, y:420, w:130, h: 70, info:{ role:'Spec → contract. v0.2.0: also writes agent-config.md and spec.md ## E2E Tests in Phase 1.', constraint:'Codex G2 cross-checked.', files:'agents/planner.md' }},
+  { id:'codebase-exp',  layer:'agent', label:'codebase-explorer',  sub:'×1-3 parallel',          x: 370, y:420, w:140, h: 70, info:{ role:'Indexes existing repo for the planner. v0.2.0: dispatched from inside Phase 0 plan flow.', constraint:'Pre-spec only.', files:'agents/codebase-explorer.md' }},
+  { id:'test-author',   layer:'agent', label:'test-author',        sub:'1 per cycle',                  x: 520, y:420, w:120, h: 70, info:{ role:'Owns test-list and red phases.', constraint:'Writes tests BEFORE implementer touches code.', files:'agents/test-author.md' }},
+  { id:'implementer',   layer:'agent', label:'implementer',        sub:'Opus coordinator',             x: 650, y:420, w:140, h: 70, info:{ role:'v0.2.0: COORDINATOR for green phase. Dispatches N Sonnet workers, runs each candidate against tests, picks simplest passing one, writes synthesis-notes.md.', constraint:'CANNOT edit test files (rule 5). Does not commit.', files:'agents/implementer.md' }},
+  { id:'reviewer-fan',  layer:'reviewer', label:'reviewer',        sub:'×6 dimensional + ×scenarios for e2e', x: 800, y:420, w:200, h: 70, badge:'×6', info:{ role:'One per dimension in cycle review. Reused in Phase F with MODE=e2e (one per scenario).', constraint:'MUST be dispatched in a single assistant turn (Task ×N with run_in_background:true).', files:'agents/reviewer.md' }},
+  { id:'consolidator',  layer:'agent', label:'consolidator',       sub:'1 per cycle, also Phase F',    x:1010, y:420, w:170, h: 70, info:{ role:'Synthesizes _consolidated.json into review.md. Splits mega-clusters. Reused for e2e synthesis.', constraint:'Foreground (NOT background).', files:'agents/consolidator.md' }},
+  { id:'impl-worker',   layer:'reviewer', label:'implementer-worker', sub:'Sonnet candidate',          x:1190, y:420, w:200, h: 70, badge:'×N', info:{ role:'v0.2.0 NEW. Independent green-phase candidate. Reads contract+tests, produces source diffs. Does not see other workers\' output.', constraint:'IMPLEMENTERS=6 default. Single-turn fan-out enforced by forge-guard rule 7. Cannot edit test files.', files:'agents/implementer-worker.md (v0.2.0 new file)' }},
+
+  // dimension chips
+  { id:'dim-correct',   layer:'reviewer', label:'correctness',    sub:'R1', x: 800, y:510, w: 90, h: 30, dim:true, info:{ role:'Does the code do what contract+tests describe?', files:'agents/reviewer.md (REVIEWER_DIMENSION=correctness)' }},
+  { id:'dim-design',    layer:'reviewer', label:'design',         sub:'R2', x: 900, y:510, w: 90, h: 30, dim:true, info:{ role:'Coherence, separation, naming, file boundaries.', files:'agents/reviewer.md (REVIEWER_DIMENSION=design)' }},
+  { id:'dim-errors',    layer:'reviewer', label:'error-handling', sub:'R3', x:1000, y:510, w:120, h: 30, dim:true, info:{ role:'Silent failures, swallowed exceptions, fallback hazards.', files:'agents/reviewer.md (REVIEWER_DIMENSION=error-handling)' }},
+  { id:'dim-simple',    layer:'reviewer', label:'simplicity',     sub:'R4', x: 800, y:545, w: 90, h: 30, dim:true, info:{ role:'Accidental complexity, dead code, premature abstraction.', files:'agents/reviewer.md (REVIEWER_DIMENSION=simplicity)' }},
+  { id:'dim-tests',     layer:'reviewer', label:'tests-vs-impl',  sub:'R5', x: 900, y:545, w:115, h: 30, dim:true, info:{ role:'Do the tests actually exercise the implementation? Tautology hunt.', files:'agents/reviewer.md (REVIEWER_DIMENSION=tests-vs-impl)' }},
+  { id:'dim-security',  layer:'reviewer', label:'security',       sub:'R6', x:1025, y:545, w: 95, h: 30, dim:true, info:{ role:'Real vulnerability classes — auth gaps, input validation, capability leaks.', files:'agents/reviewer.md (REVIEWER_DIMENSION=security)' }},
+
+  // ---- scripts (2 rows) ----
+  { id:'sc-init',          layer:'script', label:'cycle-init.sh',         sub:'scaffold cycle dir',          x:  20, y:615, w:170, h: 50, info:{ role:'Creates cycles/N/{contract,tests.json,reviewers/}. Auto-derives _scope_files.txt from contract.md "## Files".', files:'scripts/cycle-init.sh' }},
+  { id:'sc-validate',      layer:'script', label:'cycle-validate.sh',     sub:'jq schema check',             x: 200, y:615, w:170, h: 50, info:{ role:'Strict jq schema for subagent-N.json, tests.json, contract.md, e2e/scenarios.json.', files:'scripts/cycle-validate.sh' }},
+  { id:'sc-tests',         layer:'script', label:'cycle-tests-pass.sh',   sub:'red INVERTS, green normal',   x: 380, y:615, w:200, h: 50, info:{ role:'red: phase passes when tests fail. green: phase passes when tests pass.', files:'scripts/cycle-tests-pass.sh' }},
+  { id:'sc-coverage',      layer:'script', label:'cycle-coverage.sh',     sub:'file × reviewer matrix', x: 590, y:615, w:170, h: 50, info:{ role:'Flags files with <3 of 6 reviewer touches.', files:'scripts/cycle-coverage.sh' }},
+  { id:'sc-consolidate',   layer:'script', label:'cycle-consolidate.mjs', sub:'cluster findings',            x: 770, y:615, w:200, h: 50, info:{ role:'Position-based clustering + Jaccard title similarity. Computes agreement_count, disputed_severity.', files:'scripts/cycle-consolidate.mjs' }},
+  { id:'sc-pass',          layer:'script', label:'cycle-pass.sh',         sub:'per-cycle gate',              x: 980, y:615, w:170, h: 50, info:{ role:'Exit 0 iff: 0 critical AND 0 disputed clusters.', files:'scripts/cycle-pass.sh' }},
+  { id:'sc-status',        layer:'script', label:'forge-status.sh',       sub:'progress dashboard',          x:1160, y:615, w:200, h: 50, info:{ role:'Human-readable: phase, retries, cluster severity counts.', files:'scripts/forge-status.sh' }},
+  { id:'sc-e2e-extract',   layer:'script', label:'e2e-extract.sh',        sub:'spec.md → scenarios.json (v0.2.0)', x:  20, y:675, w:240, h: 50, info:{ role:'v0.2.0 NEW. Parses spec.md ## E2E Tests section, emits e2e/scenarios.json. Run at start of Phase F.', files:'scripts/e2e-extract.sh (v0.2.0 new)' }},
+  { id:'sc-e2e-pass',      layer:'script', label:'cycle-e2e-pass.sh',     sub:'ship gate (v0.2.0)',          x: 270, y:675, w:220, h: 50, info:{ role:'v0.2.0 NEW. Exit 0 iff: 0 critical clusters AND every scenario has ≥1 passing reviewer touch. Failure spawns remediation cycle.', files:'scripts/cycle-e2e-pass.sh (v0.2.0 new)' }},
+
+  // ---- hook ----
+  { id:'forge-guard',   layer:'hook',   label:'forge-guard.mjs',  sub:'PreToolUse + PostToolUse on Write|Edit|Task|Agent', x: 230, y:750, w:940, h: 55,
+    info:{ role:'Blocking: contract-exists, previous-cycle-passed, test-file-edit-during-green (incl. all N workers), parallel-fanout (5s window — applies to reviewers AND implementer-workers), post-cycle-freeze, specialist-routing (v0.2.0 — Task subagent_type must match agent-config.md bindings).\n\nAdvisory: phase-ordering, codex-gates, auto-validate-on-schema-edit.',
+           files:'hooks/forge-guard.mjs' }},
+];
+
+const CONNS = [
+  // pre-cycle order (compressed: 3 phases)
+  ['plan','spec-e2e','order'], ['spec-e2e','cycle-plan','order'],
+  ['cycle-plan','contract','order'],
+  // per-cycle order
+  ['contract','test-list','order'], ['test-list','red','order'], ['red','green','order'], ['green','consolidated','order'],
+  ['consolidated','contract','order','loop'],
+  // post-cycles flow
+  ['consolidated','phase-f','order'],
+  ['e2e-scenarios','phase-f','writes'],
+  ['phase-f','e2e-pass','order'],
+  ['chrome-mcp','phase-f','writes'],
+
+  // agent ownership
+  ['planner','spec-e2e','owns'], ['planner','contract','owns'],
+  ['codebase-exp','plan','owns'],
+  ['test-author','test-list','owns'], ['test-author','red','owns'],
+  ['implementer','green','owns'],
+  ['impl-worker','green','owns'],
+  ['reviewer-fan','consolidated','owns'],
+  ['reviewer-fan','phase-f','owns'],
+  ['consolidator','consolidated','owns'],
+  ['consolidator','phase-f','owns'],
+  ['orchestrator','plan','owns','thin'], ['orchestrator','spec-e2e','owns','thin'], ['orchestrator','cycle-plan','owns','thin'],
+  ['orchestrator','contract','owns','thin'], ['orchestrator','test-list','owns','thin'], ['orchestrator','red','owns','thin'],
+  ['orchestrator','green','owns','thin'], ['orchestrator','consolidated','owns','thin'], ['orchestrator','phase-f','owns','thin'],
+
+  // dimension chips → reviewer-fan (informational)
+  ['dim-correct','reviewer-fan','writes'], ['dim-design','reviewer-fan','writes'], ['dim-errors','reviewer-fan','writes'],
+  ['dim-simple','reviewer-fan','writes'], ['dim-tests','reviewer-fan','writes'], ['dim-security','reviewer-fan','writes'],
+
+  // scripts gate phases
+  ['sc-init','contract','gates'],
+  ['sc-validate','contract','gates'], ['sc-validate','test-list','gates'], ['sc-validate','consolidated','gates'], ['sc-validate','e2e-scenarios','gates'],
+  ['sc-tests','red','gates'], ['sc-tests','green','gates'],
+  ['sc-coverage','consolidated','gates'],
+  ['sc-consolidate','consolidated','gates'], ['sc-consolidate','phase-f','gates'],
+  ['sc-pass','consolidated','gates'],
+  ['sc-e2e-extract','e2e-scenarios','gates'],
+  ['sc-e2e-pass','e2e-pass','gates'],
+
+  // hook blocks
+  ['forge-guard','green','blocks'],
+  ['forge-guard','consolidated','blocks'],
+  ['forge-guard','contract','blocks'],
+  ['forge-guard','impl-worker','blocks'],
+  ['forge-guard','reviewer-fan','blocks'],
+];
+
+const PRESETS = {
+  full:    { layers: ['pre','cycle','post','agent','reviewer','script','hook'], conns: ['order','owns','gates','blocks'] },
+  cycle:   { layers: ['cycle','agent','reviewer'],                              conns: ['order','owns'] },
+  hooks:   { layers: ['cycle','script','hook'],                                  conns: ['order','gates','blocks'] },
+  tdd:     { layers: ['cycle','agent','reviewer','script','hook'],              conns: ['order','owns','gates','blocks'], spotlight: ['test-author','implementer','impl-worker','red','green','sc-tests','forge-guard'] },
+  fanout:  { layers: ['cycle','reviewer','agent','script'],                      conns: ['order','owns','gates','writes'], spotlight: ['reviewer-fan','consolidator','sc-consolidate','sc-coverage','sc-pass','dim-correct','dim-design','dim-errors','dim-simple','dim-tests','dim-security','consolidated'] },
+  bestofn: { layers: ['cycle','agent','reviewer','script','hook'],              conns: ['order','owns','gates','blocks'], spotlight: ['implementer','impl-worker','green','sc-tests','forge-guard'] },
+  e2e:     { layers: ['cycle','post','agent','reviewer','script'],              conns: ['order','owns','gates','writes'], spotlight: ['phase-f','e2e-scenarios','chrome-mcp','e2e-pass','sc-e2e-extract','sc-e2e-pass','reviewer-fan','consolidator','consolidated'] },
+  pre:     { layers: ['pre','agent'],                                            conns: ['order','owns'], spotlight: ['plan','spec-e2e','cycle-plan','planner','codebase-exp','orchestrator'] },
+};
+
+const PRESET_BTNS = [
+  { id: 'full',    label: 'Full system' },
+  { id: 'cycle',   label: 'Cycle flow' },
+  { id: 'pre',     label: 'Pre-cycle (claudex)' },
+  { id: 'tdd',     label: 'TDD path' },
+  { id: 'bestofn', label: 'Best-of-N green' },
+  { id: 'fanout',  label: 'Reviewer fan-out' },
+  { id: 'e2e',     label: 'Phase F (e2e)' },
+  { id: 'hooks',   label: 'Hook discipline' },
+];
+
+//
+// ---------------- STATE ----------------
+//
+
+const state = {
+  preset: 'full',
+  layers: Object.fromEntries(LAYERS.map(l => [l.id, l.on])),
+  conns: Object.fromEntries(CONN_TYPES.map(c => [c.id, c.on])),
+  comments: [],
+  spotlight: null,
+  modalNodeId: null,
+};
+
+const NODE_BY_ID = Object.fromEntries(NODES.map(n => [n.id, n]));
+
+//
+// ---------------- HELPERS ----------------
+//
+
+function clearChildren(el) { while (el.firstChild) el.removeChild(el.firstChild); }
+function ns(tag) { return document.createElementNS('http://www.w3.org/2000/svg', tag); }
+
+function visibleNode(n) { return !!state.layers[n.layer]; }
+function visibleConn(c) {
+  const [from, to, type] = c;
+  if (!state.conns[type]) return false;
+  if (!visibleNode(NODE_BY_ID[from]) || !visibleNode(NODE_BY_ID[to])) return false;
+  return true;
+}
+function isSpotlit(id) { return !state.spotlight || state.spotlight.includes(id); }
+
+//
+// ---------------- RENDER ----------------
+//
+
+const lanesEl = document.getElementById('lanes');
+const connsEl = document.getElementById('connections');
+const nodesEl = document.getElementById('nodes');
+
+function renderLanes() {
+  clearChildren(lanesEl);
+  LANES.forEach(L => {
+    if (!state.layers[L.layer]) return;
+    const r = ns('rect');
+    r.setAttribute('class','lane-bg');
+    r.setAttribute('x', 10);
+    r.setAttribute('y', L.y);
+    r.setAttribute('width', 1380);
+    r.setAttribute('height', L.h);
+    r.setAttribute('rx', 8);
+    lanesEl.appendChild(r);
+    const t = ns('text');
+    t.setAttribute('class','lane-label');
+    t.setAttribute('x', 20);
+    t.setAttribute('y', L.y + 14);
+    t.textContent = L.label;
+    lanesEl.appendChild(t);
+  });
+}
+
+function bezierPath(x1,y1,x2,y2, dy = 30) {
+  const cx1 = x1, cy1 = y1 + dy;
+  const cx2 = x2, cy2 = y2 - dy;
+  return 'M ' + x1 + ' ' + y1 + ' C ' + cx1 + ' ' + cy1 + ', ' + cx2 + ' ' + cy2 + ', ' + x2 + ' ' + y2;
+}
+function loopPath(x1,y1,x2,y2) {
+  const midY = Math.max(y1, y2) + 60;
+  return 'M ' + x1 + ' ' + y1 + ' C ' + (x1+30) + ' ' + (midY+20) + ', ' + (x2-30) + ' ' + (midY+20) + ', ' + x2 + ' ' + y2;
+}
+
+function connEndpoints(from, to) {
+  const a = NODE_BY_ID[from], b = NODE_BY_ID[to];
+  const ax = a.x + a.w / 2, ay = a.y + a.h / 2;
+  const bx = b.x + b.w / 2, by = b.y + b.h / 2;
+  let x1, y1, x2, y2;
+  if (Math.abs(ay - by) < 30) {
+    if (ax < bx) { x1 = a.x + a.w; y1 = ay; x2 = b.x; y2 = by; }
+    else         { x1 = a.x;       y1 = ay; x2 = b.x + b.w; y2 = by; }
+  } else if (ay < by) {
+    x1 = ax; y1 = a.y + a.h; x2 = bx; y2 = b.y;
+  } else {
+    x1 = ax; y1 = a.y;       x2 = bx; y2 = b.y + b.h;
+  }
+  return { x1, y1, x2, y2 };
+}
+
+function renderConnections() {
+  clearChildren(connsEl);
+  CONNS.forEach(c => {
+    if (!visibleConn(c)) return;
+    const [from, to, type, mod] = c;
+    const ct = CONN_TYPES.find(x => x.id === type);
+    const { x1, y1, x2, y2 } = connEndpoints(from, to);
+    const p = ns('path');
+    let d;
+    if (mod === 'loop') d = loopPath(x1, y1, x2, y2);
+    else if (Math.abs(y1 - y2) < 30) d = 'M ' + x1 + ' ' + y1 + ' C ' + ((x1+x2)/2) + ' ' + y1 + ', ' + ((x1+x2)/2) + ' ' + y2 + ', ' + x2 + ' ' + y2;
+    else d = bezierPath(x1, y1, x2, y2);
+    p.setAttribute('d', d);
+    p.setAttribute('fill','none');
+    p.setAttribute('stroke', ct.color);
+    p.setAttribute('stroke-width', mod === 'thin' ? 1 : 1.6);
+    if (ct.dash !== '0') p.setAttribute('stroke-dasharray', ct.dash);
+    const arrowSuffix = type === 'order' ? 'blue' : type === 'owns' ? 'green' : type === 'gates' ? 'orange' : type === 'blocks' ? 'red' : 'gray';
+    p.setAttribute('marker-end', 'url(#arrow-' + arrowSuffix + ')');
+    p.setAttribute('opacity', mod === 'thin' ? 0.35 : (isSpotlit(from) && isSpotlit(to) ? 0.85 : 0.18));
+    connsEl.appendChild(p);
+  });
+}
+
+function renderNodes() {
+  clearChildren(nodesEl);
+  NODES.forEach(n => {
+    if (!visibleNode(n)) return;
+    const g = ns('g');
+    g.setAttribute('class','node' + (state.comments.some(c => c.target === n.id) ? ' commented' : ''));
+    g.setAttribute('transform', 'translate(' + n.x + ',' + n.y + ')');
+    g.dataset.id = n.id;
+
+    const r = ns('rect');
+    r.setAttribute('class','node-bg');
+    r.setAttribute('width', n.w);
+    r.setAttribute('height', n.h);
+    r.setAttribute('rx', 8);
+    r.setAttribute('fill', LAYER_COLOR[n.layer]);
+    r.setAttribute('stroke', isSpotlit(n.id) ? 'rgba(255,255,255,0.32)' : 'rgba(255,255,255,0.08)');
+    r.setAttribute('stroke-width', 1.2);
+    r.setAttribute('opacity', isSpotlit(n.id) ? 1 : 0.45);
+    g.appendChild(r);
+
+    const t = ns('text');
+    t.setAttribute('class','node-label');
+    t.setAttribute('x', n.dim ? n.w/2 : 12);
+    t.setAttribute('y', n.dim ? n.h/2 + 4 : 22);
+    t.setAttribute('text-anchor', n.dim ? 'middle' : 'start');
+    t.textContent = n.label;
+    g.appendChild(t);
+
+    if (!n.dim) {
+      const sub = ns('text');
+      sub.setAttribute('class','node-sub');
+      sub.setAttribute('x', 12);
+      sub.setAttribute('y', n.h - 12);
+      sub.textContent = n.sub;
+      g.appendChild(sub);
+    } else {
+      const idx = ns('text');
+      idx.setAttribute('class','node-sub');
+      idx.setAttribute('x', n.w - 16);
+      idx.setAttribute('y', n.h/2 + 3);
+      idx.setAttribute('text-anchor','end');
+      idx.textContent = n.sub;
+      g.appendChild(idx);
+    }
+
+    if (n.badge) {
+      const b = ns('rect');
+      b.setAttribute('x', n.w - 32);
+      b.setAttribute('y', 8);
+      b.setAttribute('width', 24);
+      b.setAttribute('height', 16);
+      b.setAttribute('rx', 8);
+      b.setAttribute('fill', '#5cc8a4');
+      g.appendChild(b);
+      const bt = ns('text');
+      bt.setAttribute('class','node-badge');
+      bt.setAttribute('x', n.w - 20);
+      bt.setAttribute('y', 19);
+      bt.setAttribute('text-anchor','middle');
+      bt.textContent = n.badge;
+      g.appendChild(bt);
+    }
+
+    g.addEventListener('click', () => openModal(n.id));
+    nodesEl.appendChild(g);
+  });
+}
+
+function renderAll() {
+  renderLanes();
+  renderConnections();
+  renderNodes();
+  updatePrompt();
+  renderCommentList();
+  renderPresetButtons();
+}
+
+//
+// ---------------- SIDEBAR ----------------
+//
+
+function renderPresetButtons() {
+  const wrap = document.getElementById('presets');
+  clearChildren(wrap);
+  PRESET_BTNS.forEach(p => {
+    const b = document.createElement('button');
+    b.className = 'preset' + (state.preset === p.id ? ' active' : '');
+    b.textContent = p.label;
+    b.addEventListener('click', () => applyPreset(p.id));
+    wrap.appendChild(b);
+  });
+}
+
+function renderLayerToggles() {
+  const wrap = document.getElementById('layer-toggles');
+  clearChildren(wrap);
+  LAYERS.forEach(L => {
+    const lab = document.createElement('label');
+    lab.className = 'check';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = state.layers[L.id];
+    cb.addEventListener('change', () => { state.layers[L.id] = cb.checked; renderAll(); });
+    const sw = document.createElement('span');
+    sw.className = 'swatch';
+    sw.style.background = LAYER_COLOR[L.id];
+    const tx = document.createElement('span');
+    tx.textContent = L.label;
+    lab.appendChild(cb); lab.appendChild(sw); lab.appendChild(tx);
+    wrap.appendChild(lab);
+  });
+}
+
+function renderConnToggles() {
+  const wrap = document.getElementById('conn-toggles');
+  clearChildren(wrap);
+  CONN_TYPES.forEach(C => {
+    const lab = document.createElement('label');
+    lab.className = 'check';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = state.conns[C.id];
+    cb.addEventListener('change', () => { state.conns[C.id] = cb.checked; renderAll(); });
+    const sw = document.createElement('span');
+    sw.className = 'swatch';
+    sw.style.background = C.color;
+    const tx = document.createElement('span');
+    tx.textContent = C.label;
+    lab.appendChild(cb); lab.appendChild(sw); lab.appendChild(tx);
+    wrap.appendChild(lab);
+  });
+}
+
+function applyPreset(id) {
+  const p = PRESETS[id];
+  state.preset = id;
+  Object.keys(state.layers).forEach(k => state.layers[k] = p.layers.includes(k));
+  Object.keys(state.conns).forEach(k => state.conns[k] = p.conns.includes(k));
+  state.spotlight = p.spotlight || null;
+  renderLayerToggles();
+  renderConnToggles();
+  renderAll();
+}
+
+//
+// ---------------- MODAL ----------------
+//
+
+const modalBg = document.getElementById('modal-bg');
+const modalTitle = document.getElementById('modal-title');
+const modalTarget = document.getElementById('modal-target');
+const modalMeta = document.getElementById('modal-meta');
+const modalInput = document.getElementById('modal-input');
+const modalSave = document.getElementById('modal-save');
+const modalCancel = document.getElementById('modal-cancel');
+const modalDelete = document.getElementById('modal-delete');
+
+function appendMetaRow(parent, key, value) {
+  if (!value) return;
+  const row = document.createElement('div');
+  row.className = 'modal-meta-row';
+  const k = document.createElement('strong');
+  k.textContent = key + ': ';
+  row.appendChild(k);
+  // value may include newlines — split into separate text/br nodes
+  const lines = String(value).split('\n');
+  lines.forEach((line, i) => {
+    if (i > 0) row.appendChild(document.createElement('br'));
+    row.appendChild(document.createTextNode(line));
+  });
+  parent.appendChild(row);
+}
+
+function openModal(nodeId) {
+  const n = NODE_BY_ID[nodeId];
+  state.modalNodeId = nodeId;
+  modalTarget.textContent = n.label + (n.sub ? ' — ' + n.sub : '');
+  clearChildren(modalMeta);
+  const info = n.info || {};
+  appendMetaRow(modalMeta, 'Role', info.role);
+  appendMetaRow(modalMeta, 'Owner', info.owner);
+  appendMetaRow(modalMeta, 'Constraint', info.constraint);
+  appendMetaRow(modalMeta, 'Output', info.output);
+  appendMetaRow(modalMeta, 'Note', info.note);
+  appendMetaRow(modalMeta, 'File', info.files);
+
+  const existing = state.comments.find(c => c.target === nodeId);
+  modalInput.value = existing ? existing.text : '';
+  modalDelete.style.display = existing ? '' : 'none';
+  modalTitle.textContent = existing ? 'Edit comment' : 'Add a comment';
+  modalBg.classList.add('show');
+  setTimeout(() => modalInput.focus(), 0);
+}
+
+function closeModal() {
+  modalBg.classList.remove('show');
+  state.modalNodeId = null;
+}
+
+modalCancel.addEventListener('click', closeModal);
+modalBg.addEventListener('click', (e) => { if (e.target === modalBg) closeModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+modalSave.addEventListener('click', () => {
+  const text = modalInput.value.trim();
+  const id = state.modalNodeId;
+  if (!id) return;
+  state.comments = state.comments.filter(c => c.target !== id);
+  if (text) {
+    const n = NODE_BY_ID[id];
+    state.comments.push({ id: Date.now(), target: id, targetLabel: n.label, targetSub: n.sub, text });
+  }
+  closeModal();
+  renderAll();
+});
+
+modalDelete.addEventListener('click', () => {
+  const id = state.modalNodeId;
+  state.comments = state.comments.filter(c => c.target !== id);
+  closeModal();
+  renderAll();
+});
+
+function renderCommentList() {
+  const list = document.getElementById('comment-list');
+  document.getElementById('cmt-count').textContent = state.comments.length;
+  clearChildren(list);
+  if (state.comments.length === 0) {
+    const e = document.createElement('div');
+    e.className = 'empty-state';
+    e.textContent = 'Click any node in the diagram to add a question or note. Comments roll into the prompt.';
+    list.appendChild(e);
+    return;
+  }
+  state.comments.forEach(c => {
+    const item = document.createElement('div');
+    item.className = 'comment-item';
+    const target = document.createElement('div');
+    target.className = 'comment-target';
+    target.textContent = c.targetLabel + (c.targetSub ? ' / ' + c.targetSub : '');
+    const txt = document.createElement('div');
+    txt.className = 'comment-text';
+    txt.textContent = c.text;
+    const del = document.createElement('button');
+    del.className = 'comment-del';
+    del.textContent = 'remove';
+    del.addEventListener('click', () => {
+      state.comments = state.comments.filter(x => x.id !== c.id);
+      renderAll();
+    });
+    item.appendChild(target); item.appendChild(txt); item.appendChild(del);
+    list.appendChild(item);
+  });
+}
+
+//
+// ---------------- PROMPT ----------------
+//
+
+function updatePrompt() {
+  const visible = LAYERS.filter(L => state.layers[L.id]).map(L => L.label);
+  const presetLabel = (PRESET_BTNS.find(p => p.id === state.preset) || {}).label || 'Custom';
+  const lines = [];
+  lines.push("I'm exploring the Code Forge v2 (0.2.0 design) architecture (preset: " + presetLabel + ").");
+  lines.push('Visible layers: ' + visible.join(', ') + '.');
+  if (state.comments.length === 0) {
+    lines.push('');
+    lines.push('No specific component questions yet — point me at a node in the diagram to drop one in.');
+  } else {
+    lines.push('');
+    lines.push('Specific questions / notes about ' + state.comments.length + ' component' + (state.comments.length === 1 ? '' : 's') + ':');
+    state.comments.forEach(c => {
+      lines.push('');
+      lines.push('**' + c.targetLabel + '**' + (c.targetSub ? ' (' + c.targetSub + ')' : '') + ':');
+      lines.push(c.text);
+    });
+  }
+  document.getElementById('prompt').textContent = lines.join('\n');
+}
+
+document.getElementById('copy').addEventListener('click', async () => {
+  const btn = document.getElementById('copy');
+  const text = document.getElementById('prompt').textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1200);
+  } catch (e) {
+    btn.textContent = 'Copy failed';
+    setTimeout(() => { btn.textContent = 'Copy Prompt'; }, 1500);
+  }
+});
+
+//
+// ---------------- INIT ----------------
+//
+
+renderLayerToggles();
+renderConnToggles();
+applyPreset('full');
+</script>
+</body>
+</html>

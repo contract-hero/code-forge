@@ -1,0 +1,1 @@
+Implement a Sui Move counter dApp: 1) Move module with a shared Counter object (owner can reset, anyone can increment), Move.toml, unit tests for both operations. 2) TypeScript caller using @mysten/sui SDK to construct & execute PTBs for increment/reset. Mock the RPC client. All code under 200 LOC total. Build + test both.
