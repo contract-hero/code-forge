@@ -2,192 +2,1067 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Code Forge v2 — Flow & Agent Hierarchy</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="dark" />
+<title>Code Forge v2 — architecture map</title>
 <style>
   :root {
-    --bg: #0c0c0e;
-    --panel: #15161a;
-    --panel-2: #1c1d23;
-    --border: #2a2c33;
-    --border-2: #3a3d46;
-    --fg: #e8e9ec;
-    --muted: #8b8e97;
+    /* base — tinted neutrals toward the accent hue */
+    --bg: #0a0c12;
+    --bg-deep: #07080d;
+    --panel: #11141a;
+    --panel-2: #181c25;
+    --panel-3: #1f242f;
+    --border: #232733;
+    --border-2: #343949;
+    --border-3: #4a5163;
+    --fg: #e8eaef;
+    --fg-soft: #c1c5cf;
+    --muted: #8b8f9a;
+    --muted-2: #5e636e;
+    --rule: rgba(255,255,255,0.06);
+
+    /* accents */
     --accent: #6ea8fe;
     --accent-strong: #4d8efc;
+    --accent-soft: rgba(110,168,254,0.16);
     --good: #5cc8a4;
     --warn: #d4a35c;
     --bad: #e5736b;
-    --phase-pre: #2b3a55;
+
+    /* lane palette — solid base */
+    --phase-pre:   #2b3a55;
     --phase-cycle: #3b2b4d;
-    --agent: #243a32;
-    --reviewer: #2b3d24;
-    --script: #4d3a1f;
-    --hook: #4d2424;
-    --shadow: 0 8px 24px rgba(0,0,0,0.45);
+    --post:        #4d3a55;
+    --agent:       #243a32;
+    --reviewer:    #2b3d24;
+    --script:      #4d3a1f;
+    --hook:        #4d2424;
+
+    /* lane palette — tinted backdrop fills (load-bearing) */
+    --pre-fill:      rgba(82, 134, 232, 0.10);
+    --cycle-fill:    rgba(168, 110, 232, 0.10);
+    --post-fill:     rgba(216, 110, 184, 0.09);
+    --agent-fill:    rgba(92, 200, 164, 0.05);
+    --reviewer-fill: rgba(184, 216, 110, 0.05);
+    --script-fill:   rgba(212, 163, 92, 0.05);
+    --hook-fill:     rgba(229, 115, 107, 0.05);
+
+    /* lane edge accents */
+    --pre-edge:   rgba(110, 168, 254, 0.55);
+    --cycle-edge: rgba(184, 130, 254, 0.55);
+    --post-edge:  rgba(229, 130, 200, 0.5);
+
+    /* type scale */
+    --fs-display: clamp(22px, 2.4vw, 30px);
+    --fs-h2:      clamp(15px, 1.2vw, 17px);
+    --fs-body:    13px;
+    --fs-small:   11.5px;
+    --fs-xs:      10.5px;
+
+    --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, system-ui, sans-serif;
+    --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+
+    --shadow-1: 0 1px 0 rgba(255,255,255,0.04), 0 8px 24px rgba(0,0,0,0.45);
+    --shadow-2: 0 12px 48px rgba(0,0,0,0.55);
+
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-out-q: cubic-bezier(0.22, 1, 0.36, 1);
   }
+
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; height: 100%; overflow: hidden; }
-  .app { display: grid; grid-template-columns: 320px 1fr; grid-template-rows: 1fr auto; height: 100vh; gap: 0; }
-  .sidebar { grid-row: 1 / span 2; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
-  .sidebar header { padding: 16px 18px 12px; border-bottom: 1px solid var(--border); }
-  .sidebar h1 { font-size: 16px; margin: 0 0 2px; letter-spacing: -0.01em; }
-  .sidebar h1 small { color: var(--muted); font-weight: 400; font-size: 11px; }
-  .sidebar p { color: var(--muted); font-size: 12px; margin: 4px 0 0; line-height: 1.4; }
-  .group { padding: 14px 18px; border-bottom: 1px solid var(--border); }
-  .group h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
-  .preset-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-  .preset { background: var(--panel-2); color: var(--fg); border: 1px solid var(--border-2); padding: 7px 9px; border-radius: 6px; cursor: pointer; font-size: 12px; text-align: left; transition: background .12s; }
-  .preset:hover { background: #24262d; }
-  .preset.active { background: var(--accent-strong); border-color: var(--accent-strong); color: #fff; }
-  .check { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; cursor: pointer; user-select: none; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    height: 100%;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* page chrome ------------------------------------------------------- */
+
+  .page {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    height: 100vh;
+    min-height: 0;
+  }
+
+  .hero {
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 18px 28px 16px;
+    background:
+      radial-gradient(1000px 200px at 12% 100%, rgba(110,168,254,0.10), transparent 60%),
+      radial-gradient(800px 220px at 78% 100%, rgba(184,110,254,0.08), transparent 65%),
+      linear-gradient(to bottom, var(--bg-deep), var(--bg));
+    border-bottom: 1px solid var(--rule);
+  }
+  .hero::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: -1px;
+    height: 1px;
+    background: linear-gradient(to right, transparent, var(--accent-soft), transparent);
+  }
+
+  .hero-mark { min-width: 0; }
+  .hero-eyebrow {
+    font-size: var(--fs-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--muted);
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .hero-title {
+    font-family: var(--font-display);
+    font-size: var(--fs-display);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin: 0;
+    line-height: 1;
+  }
+  .hero-title .v {
+    color: var(--accent);
+    font-weight: 800;
+  }
+  .hero-tag {
+    margin: 8px 0 0;
+    color: var(--fg-soft);
+    font-size: 13.5px;
+    line-height: 1.5;
+    max-width: 78ch;
+  }
+  .hero-tag strong {
+    color: var(--fg);
+    font-weight: 600;
+    border-bottom: 1px dashed var(--border-3);
+    padding-bottom: 1px;
+  }
+
+  .hero-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+  .hero-tour {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--accent-strong);
+    color: #fff;
+    border: none;
+    padding: 9px 14px 9px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.18) inset, 0 8px 20px rgba(77,142,252,0.25);
+    transition: transform 180ms var(--ease-out), background 180ms;
+    font-family: inherit;
+  }
+  .hero-tour:hover { background: #5d99fc; transform: translateY(-1px); }
+  .hero-tour::before {
+    content: "";
+    width: 7px; height: 7px;
+    border-radius: 999px;
+    background: #fff;
+    box-shadow: 0 0 0 3px rgba(255,255,255,0.18);
+    animation: pulse 2.4s var(--ease-out) infinite;
+  }
+  .hero-link {
+    color: var(--muted);
+    font-size: 12px;
+    text-decoration: none;
+    border-bottom: 1px dashed transparent;
+    font-family: var(--font-mono);
+    transition: color 160ms;
+  }
+  .hero-link:hover { color: var(--fg); border-bottom-color: var(--border-3); }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(255,255,255,0.18); }
+    50%      { box-shadow: 0 0 0 6px rgba(255,255,255,0.0); }
+  }
+
+  /* app shell --------------------------------------------------------- */
+
+  .app {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    min-height: 0;
+    position: relative;
+  }
+
+  .sidebar {
+    background: var(--panel);
+    border-right: 1px solid var(--rule);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    position: relative;
+    z-index: 5;
+  }
+  .sidebar > * { flex-shrink: 0; }
+  .sidebar .comments { flex: 1 1 auto; }
+
+  .group {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .group h2 {
+    font-size: var(--fs-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--muted);
+    margin: 0 0 10px;
+    font-weight: 700;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .group h2 .badge {
+    background: var(--accent-strong);
+    color: #fff;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 9.5px;
+    letter-spacing: 0;
+    text-transform: none;
+    font-family: var(--font-mono);
+    font-weight: 600;
+  }
+
+  .preset-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .preset {
+    background: var(--panel-2);
+    color: var(--fg-soft);
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 11.5px;
+    text-align: left;
+    transition: background 140ms var(--ease-out), color 140ms, border-color 140ms, transform 120ms;
+    font-family: inherit;
+    font-weight: 500;
+    letter-spacing: 0.005em;
+    line-height: 1.25;
+  }
+  .preset:hover { background: var(--panel-3); color: var(--fg); border-color: var(--border-2); }
+  .preset.active {
+    background: var(--accent-strong);
+    border-color: var(--accent-strong);
+    color: #fff;
+    box-shadow: 0 6px 18px rgba(77,142,252,0.28);
+  }
+
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 5px 0;
+    font-size: 12px;
+    color: var(--fg-soft);
+    cursor: pointer;
+    user-select: none;
+    line-height: 1.2;
+  }
+  .check:hover { color: var(--fg); }
   .check input { accent-color: var(--accent); margin: 0; }
-  .swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; border: 1px solid var(--border-2); }
-  .comments { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 18px; }
-  .comments h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; font-weight: 600; display: flex; align-items: center; justify-content: space-between; }
-  .comments h2 .badge { background: var(--accent-strong); color: #fff; padding: 2px 7px; border-radius: 10px; font-size: 10px; letter-spacing: 0; text-transform: none; }
-  .comment-item { background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; font-size: 12px; }
-  .comment-target { color: var(--accent); font-weight: 600; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; }
-  .comment-text { color: var(--fg); margin: 4px 0 6px; line-height: 1.4; white-space: pre-wrap; }
-  .comment-del { background: transparent; color: var(--muted); border: 1px solid var(--border-2); padding: 2px 7px; border-radius: 4px; cursor: pointer; font-size: 10px; }
-  .comment-del:hover { color: var(--bad); border-color: var(--bad); }
-  .empty-state { color: var(--muted); font-size: 12px; font-style: italic; }
+  .swatch {
+    width: 11px; height: 11px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    border: 1px solid var(--border-2);
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
+  }
 
-  .canvas-wrap { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-  .canvas { flex: 1; position: relative; overflow: auto; background: radial-gradient(circle at 30% 20%, #131419 0%, #0c0c0e 60%); }
-  /* Explicit pixel sizing so the canvas scrollbars actually trigger when the
-     window is narrower than the diagram. Using width/height attrs on <svg>
-     also works; CSS makes it easier to tune later. */
+  .comments {
+    overflow-y: auto;
+    padding: 14px 18px 22px;
+    min-height: 0;
+  }
+  .comment-item {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 11px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    transition: border-color 140ms;
+  }
+  .comment-item:hover { border-color: var(--border-2); }
+  .comment-target {
+    color: var(--accent);
+    font-weight: 600;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.3;
+  }
+  .comment-text {
+    color: var(--fg);
+    margin: 5px 0 7px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    font-size: 12px;
+  }
+  .comment-del {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    padding: 2px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 10px;
+    font-family: inherit;
+    letter-spacing: 0.02em;
+    transition: color 140ms, border-color 140ms;
+  }
+  .comment-del:hover { color: var(--bad); border-color: rgba(229,115,107,0.5); }
+
+  .empty-state {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: rgba(255,255,255,0.012);
+  }
+  .empty-state strong { color: var(--fg-soft); font-weight: 600; }
+
+  /* canvas ------------------------------------------------------------ */
+
+  .canvas-wrap {
+    display: grid;
+    grid-template-rows: 1fr auto auto;
+    min-height: 0;
+    min-width: 0;
+  }
+
+  .canvas {
+    position: relative;
+    overflow: auto;
+    background:
+      radial-gradient(1200px 600px at 30% 0%, rgba(110,168,254,0.05), transparent 70%),
+      radial-gradient(900px 500px at 80% 110%, rgba(184,110,254,0.04), transparent 70%),
+      var(--bg);
+    min-height: 0;
+  }
   svg { display: block; width: 1400px; height: 820px; }
-  /* Friendlier scrollbars on macOS so the user can see them */
   .canvas::-webkit-scrollbar { height: 12px; width: 12px; }
-  .canvas::-webkit-scrollbar-track { background: #0c0c0e; }
-  .canvas::-webkit-scrollbar-thumb { background: #2a2c33; border-radius: 6px; }
-  .canvas::-webkit-scrollbar-thumb:hover { background: #3a3d46; }
-  .canvas::-webkit-scrollbar-corner { background: #0c0c0e; }
-  .node { cursor: pointer; transition: filter .12s, transform .12s; }
-  .node:hover { filter: brightness(1.25); }
-  .node.commented .node-bg { stroke: var(--accent); stroke-width: 2.5; filter: drop-shadow(0 0 6px var(--accent)); }
-  .node-label { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; fill: var(--fg); pointer-events: none; }
-  .node-sub { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; font-size: 9.5px; fill: var(--muted); pointer-events: none; }
-  .node-badge { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 9px; fill: var(--bg); }
-  .lane-label { font-family: -apple-system, system-ui, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; fill: var(--muted); }
-  .lane-bg { fill: rgba(255,255,255,0.012); stroke: rgba(255,255,255,0.04); stroke-dasharray: 2,4; }
-  .legend { position: absolute; bottom: 10px; left: 10px; background: rgba(15,16,20,0.92); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 11px; color: var(--muted); backdrop-filter: blur(6px); }
-  .legend-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
-  .legend-line { width: 22px; height: 0; border-top: 2px solid var(--accent); }
+  .canvas::-webkit-scrollbar-track { background: var(--bg-deep); }
+  .canvas::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+  .canvas::-webkit-scrollbar-thumb:hover { background: var(--border-2); }
+  .canvas::-webkit-scrollbar-corner { background: var(--bg-deep); }
 
-  .promptbar { background: var(--panel); border-top: 1px solid var(--border); padding: 12px 16px; display: flex; gap: 12px; align-items: stretch; min-height: 90px; }
-  .prompt-box { flex: 1; background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 8px; padding: 10px 12px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--fg); white-space: pre-wrap; overflow-y: auto; max-height: 180px; line-height: 1.5; }
-  .copy-btn { background: var(--accent-strong); color: #fff; border: none; padding: 0 18px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600; height: 100%; min-width: 110px; transition: background .12s; }
-  .copy-btn:hover { background: #5d99fc; }
+  /* SVG element styling */
+  .lane-band { stroke-width: 1; }
+  .lane-rule { stroke: var(--border-2); stroke-dasharray: 4 4; }
+  .lane-label {
+    font-family: var(--font-sans);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    fill: var(--fg-soft);
+    font-weight: 700;
+  }
+  .lane-sublabel {
+    font-family: var(--font-sans);
+    font-size: 10px;
+    fill: var(--muted);
+    letter-spacing: 0.04em;
+  }
+  .lane-numeral {
+    font-family: var(--font-display);
+    font-size: 88px;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+  }
+  .lane-numeral-pre   { fill: rgba(110,168,254,0.16); }
+  .lane-numeral-cycle { fill: rgba(184,130,254,0.16); }
+  .lane-numeral-post  { fill: rgba(229,130,200,0.15); }
+  .lane-divider {
+    fill: none;
+    stroke: var(--border-2);
+    stroke-width: 1;
+  }
+  .lane-divider-label {
+    font-family: var(--font-sans);
+    font-size: 9.5px;
+    fill: var(--muted-2);
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    font-weight: 600;
+  }
+
+  .node {
+    cursor: pointer;
+    transition: filter 160ms var(--ease-out), opacity 160ms var(--ease-out);
+  }
+  .node:hover { filter: brightness(1.18); }
+  .node.commented .node-bg {
+    stroke: var(--accent);
+    stroke-width: 2.5;
+    filter: drop-shadow(0 0 8px rgba(110,168,254,0.55));
+  }
+  .node-label {
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    font-weight: 700;
+    fill: var(--fg);
+    pointer-events: none;
+    letter-spacing: -0.005em;
+  }
+  .node-label-mono {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 600;
+    fill: var(--fg);
+    pointer-events: none;
+  }
+  .node-sub {
+    font-family: var(--font-sans);
+    font-size: 10px;
+    fill: var(--fg-soft);
+    pointer-events: none;
+    letter-spacing: 0.01em;
+  }
+  .node-badge { font-family: var(--font-mono); font-size: 9.5px; font-weight: 700; fill: var(--bg); }
+
+  .conn-loop {
+    stroke-dasharray: 6 5;
+    animation: dash-march 2s linear infinite;
+  }
+  @keyframes dash-march { to { stroke-dashoffset: -22; } }
+
+  .legend {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    background: rgba(15,18,26,0.92);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 11px;
+    color: var(--muted);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .legend-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+  .legend-line { width: 26px; height: 0; border-top: 2px solid var(--accent); }
+  .legend-row strong { color: var(--fg-soft); font-weight: 600; }
+
+  /* status bar ------------------------------------------------------- */
+
+  .statusbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    background: var(--panel);
+    border-top: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: 11.5px;
+    font-family: var(--font-sans);
+    line-height: 1.4;
+    flex-wrap: wrap;
+    min-height: 36px;
+  }
+  .statusbar strong { color: var(--fg); font-weight: 600; }
+  .status-sep { color: var(--muted-2); }
+  .status-spacer { flex: 1; }
+  .status-hint {
+    color: var(--accent);
+    font-weight: 500;
+    opacity: 0.78;
+  }
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 9px;
+  }
+  .status-pill .dot {
+    width: 6px; height: 6px;
+    border-radius: 999px;
+    background: var(--accent);
+  }
+
+  /* prompt bar ------------------------------------------------------- */
+
+  .promptbar {
+    background: var(--panel);
+    border-top: 1px solid var(--rule);
+    padding: 12px 16px 14px;
+    display: flex;
+    gap: 12px;
+    align-items: stretch;
+    min-height: 96px;
+  }
+  .prompt-box {
+    flex: 1;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fg);
+    white-space: pre-wrap;
+    overflow-y: auto;
+    max-height: 180px;
+    line-height: 1.55;
+  }
+  .copy-btn {
+    background: var(--accent-strong);
+    color: #fff;
+    border: none;
+    padding: 0 18px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 12.5px;
+    font-weight: 700;
+    height: auto;
+    min-width: 120px;
+    transition: background 140ms, transform 120ms;
+    font-family: inherit;
+    letter-spacing: 0.01em;
+    box-shadow: 0 6px 18px rgba(77,142,252,0.25);
+  }
+  .copy-btn:hover { background: #5d99fc; transform: translateY(-1px); }
   .copy-btn.copied { background: var(--good); }
 
-  /* Modal */
-  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(2px); }
+  /* modal ------------------------------------------------------------ */
+
+  .modal-bg {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.62);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    animation: fade-in 200ms var(--ease-out);
+  }
   .modal-bg.show { display: flex; }
-  .modal { background: var(--panel); border: 1px solid var(--border-2); border-radius: 10px; padding: 18px 20px; width: 460px; max-width: 92vw; box-shadow: var(--shadow); }
-  .modal-title { font-size: 13px; font-weight: 600; margin: 0 0 4px; }
-  .modal-target { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; color: var(--accent); margin-bottom: 12px; }
-  .modal-meta { background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 6px; padding: 8px 10px; font-size: 11px; color: var(--muted); margin-bottom: 12px; line-height: 1.5; }
-  .modal-meta-row { margin: 3px 0; }
-  .modal-meta-row strong { color: var(--fg); font-weight: 600; }
-  .modal textarea { width: 100%; min-height: 90px; resize: vertical; background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 6px; padding: 8px 10px; color: var(--fg); font-family: inherit; font-size: 12px; line-height: 1.4; }
-  .modal textarea:focus { outline: none; border-color: var(--accent); }
-  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
-  .modal-btn { background: var(--panel-2); color: var(--fg); border: 1px solid var(--border-2); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; }
-  .modal-btn.primary { background: var(--accent-strong); color: #fff; border-color: var(--accent-strong); }
+  .modal {
+    background: var(--panel);
+    border: 1px solid var(--border-2);
+    border-radius: 12px;
+    padding: 18px 20px 16px;
+    width: 520px;
+    max-width: 92vw;
+    box-shadow: var(--shadow-2);
+    animation: rise 220ms var(--ease-out);
+  }
+  .modal-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .modal-title {
+    font-size: 14px;
+    font-weight: 700;
+    margin: 0 0 4px;
+    color: var(--fg);
+    letter-spacing: -0.005em;
+  }
+  .modal-target {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent);
+    line-height: 1.3;
+  }
+  .modal-x {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0;
+    flex-shrink: 0;
+    transition: color 140ms, border-color 140ms;
+  }
+  .modal-x:hover { color: var(--fg); border-color: var(--border-2); }
+
+  .modal-meta {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 12px;
+    color: var(--fg-soft);
+    margin-bottom: 14px;
+    line-height: 1.55;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .modal-meta-row {
+    display: grid;
+    grid-template-columns: 80px 1fr;
+    gap: 10px;
+    align-items: start;
+  }
+  .modal-meta-key {
+    color: var(--muted);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 600;
+    padding-top: 2px;
+    user-select: none;
+  }
+  .modal-meta-value { color: var(--fg-soft); white-space: pre-wrap; }
+  .modal-meta-value.mono {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--fg);
+  }
+
+  .modal textarea {
+    width: 100%;
+    min-height: 96px;
+    resize: vertical;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: var(--fg);
+    font-family: inherit;
+    font-size: 12.5px;
+    line-height: 1.5;
+    transition: border-color 140ms, box-shadow 140ms;
+  }
+  .modal textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(110,168,254,0.18);
+  }
+  .modal-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 14px;
+  }
+  .modal-btn {
+    background: var(--panel-2);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    padding: 7px 14px;
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    font-weight: 500;
+    transition: background 140ms, border-color 140ms;
+  }
+  .modal-btn:hover { background: var(--panel-3); border-color: var(--border-2); }
+  .modal-btn.primary {
+    background: var(--accent-strong);
+    color: #fff;
+    border-color: var(--accent-strong);
+    font-weight: 700;
+    box-shadow: 0 6px 16px rgba(77,142,252,0.22);
+  }
   .modal-btn.primary:hover { background: #5d99fc; }
-  .modal-btn.danger { color: var(--bad); border-color: rgba(229,115,107,0.4); }
+  .modal-btn.danger {
+    color: var(--bad);
+    border-color: rgba(229,115,107,0.4);
+  }
+  .modal-btn.danger:hover { color: #fff; background: var(--bad); border-color: var(--bad); }
+
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes rise { from { transform: translateY(8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+  /* intro modal ------------------------------------------------------ */
+
+  .intro-bg {
+    position: fixed;
+    inset: 0;
+    background: rgba(7,8,13,0.78);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    animation: fade-in 280ms var(--ease-out);
+  }
+  .intro-bg.show { display: flex; }
+  .intro {
+    background:
+      radial-gradient(600px 200px at 0% 0%, rgba(110,168,254,0.10), transparent 60%),
+      radial-gradient(500px 180px at 100% 100%, rgba(184,110,254,0.08), transparent 70%),
+      var(--panel);
+    border: 1px solid var(--border-2);
+    border-radius: 14px;
+    padding: 26px 28px 22px;
+    width: 560px;
+    max-width: 92vw;
+    box-shadow: var(--shadow-2);
+    animation: rise 280ms var(--ease-out);
+  }
+  .intro-eyebrow {
+    font-size: var(--fs-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--accent);
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .intro-title {
+    font-family: var(--font-display);
+    font-size: clamp(22px, 2.2vw, 28px);
+    font-weight: 800;
+    margin: 0 0 12px;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    color: var(--fg);
+  }
+  .intro-lead {
+    color: var(--fg-soft);
+    font-size: 13.5px;
+    line-height: 1.55;
+    margin: 0 0 16px;
+  }
+  .intro-steps {
+    margin: 0 0 18px;
+    padding: 0;
+    list-style: none;
+    counter-reset: step;
+  }
+  .intro-steps li {
+    counter-increment: step;
+    position: relative;
+    padding: 10px 12px 10px 44px;
+    margin-bottom: 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 12.5px;
+    color: var(--fg-soft);
+    line-height: 1.5;
+  }
+  .intro-steps li::before {
+    content: counter(step, decimal-leading-zero);
+    position: absolute;
+    left: 12px;
+    top: 9px;
+    width: 24px;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+  .intro-steps li strong { color: var(--fg); font-weight: 700; }
+  .intro-steps li:nth-child(1) { border-left: 2px solid rgba(110,168,254,0.7); }
+  .intro-steps li:nth-child(2) { border-left: 2px solid rgba(184,130,254,0.7); }
+  .intro-steps li:nth-child(3) { border-left: 2px solid rgba(229,130,200,0.7); }
+
+  .intro-tip {
+    background: var(--panel-2);
+    border: 1px dashed var(--border-2);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: var(--fg-soft);
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 0 0 18px;
+  }
+  .intro-tip strong { color: var(--fg); font-weight: 700; }
+  .kbd {
+    display: inline-block;
+    padding: 1px 7px;
+    background: var(--panel-3);
+    border: 1px solid var(--border-2);
+    border-radius: 5px;
+    font-family: var(--font-sans);
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .intro-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .intro-cta {
+    background: var(--accent-strong);
+    color: #fff;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 700;
+    font-family: inherit;
+    box-shadow: 0 8px 22px rgba(77,142,252,0.3);
+    transition: background 160ms, transform 120ms;
+  }
+  .intro-cta:hover { background: #5d99fc; transform: translateY(-1px); }
+  .intro-skip {
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    padding: 8px 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    transition: color 140ms;
+  }
+  .intro-skip:hover { color: var(--fg-soft); }
+
+  /* drawer toggles --------------------------------------------------- */
+
+  .drawer-open, .drawer-close {
+    display: none;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    padding: 7px 11px;
+    border-radius: 7px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .drawer-open {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 4;
+    box-shadow: var(--shadow-1);
+  }
+  .drawer-close {
+    position: absolute;
+    top: 12px;
+    right: -44px;
+    width: 36px; height: 36px;
+    padding: 0;
+    font-size: 18px;
+    line-height: 1;
+    background: var(--panel);
+    border-color: var(--border-2);
+  }
+
+  .scrim {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    backdrop-filter: blur(2px);
+    z-index: 4;
+  }
+  .scrim.show { display: block; }
+
+  /* narrow viewport -------------------------------------------------- */
+
+  @media (max-width: 880px) {
+    .hero { padding: 14px 18px 12px; flex-direction: column; align-items: flex-start; }
+    .hero-meta { width: 100%; justify-content: space-between; }
+    .hero-tag { font-size: 12.5px; }
+
+    .app { grid-template-columns: 1fr; }
+    .sidebar {
+      position: fixed;
+      top: 0; bottom: 0; left: 0;
+      width: 320px;
+      max-width: 86vw;
+      transform: translateX(-100%);
+      transition: transform 260ms var(--ease-out-q);
+      box-shadow: var(--shadow-2);
+      border-right: 1px solid var(--border);
+    }
+    .sidebar.open { transform: translateX(0); }
+    .drawer-open { display: inline-flex; }
+    .sidebar.open .drawer-close { display: inline-flex; }
+
+    .promptbar { padding: 10px 12px; min-height: 80px; }
+    .copy-btn { min-width: 92px; padding: 0 12px; font-size: 12px; }
+    .legend { font-size: 10px; padding: 8px 10px; }
+  }
+  @media (max-width: 520px) {
+    .hero-title { font-size: 22px; }
+    .hero-tag { font-size: 12px; }
+    .hero-link { display: none; }
+    .modal { padding: 14px; }
+  }
+
+  /* a11y ------------------------------------------------------------- */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 80ms !important; }
+    .conn-loop { animation: none; }
+    .hero-tour::before { animation: none; }
+  }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 </style>
 </head>
 <body>
-<div class="app">
-  <aside class="sidebar">
-    <header>
-      <h1>Code Forge v2 <small>0.2.0 design</small></h1>
-      <p>Flow + agent hierarchy explorer. v0.2.0 amendments: claudex Phase 0, e2e-as-glue, best-of-N implementer, specialist routing. Click any node to comment.</p>
-    </header>
-
-    <div class="group">
-      <h2>Preset views</h2>
-      <div class="preset-row" id="presets"></div>
+<div class="page">
+  <header class="hero">
+    <div class="hero-mark">
+      <div class="hero-eyebrow">v0.2.0 design · interactive architecture map</div>
+      <h1 class="hero-title">Code Forge <span class="v">v2</span></h1>
+      <p class="hero-tag">Three phases prepare it. Five run the cycle. One reviews end to end. <strong>Click any node.</strong></p>
     </div>
-
-    <div class="group">
-      <h2>Layers</h2>
-      <div id="layer-toggles"></div>
+    <div class="hero-meta">
+      <button class="hero-tour" id="show-intro" type="button">Take the 5-min tour</button>
+      <a class="hero-link" href="https://github.com/alilloig/code-forge" target="_blank" rel="noopener">github.com/alilloig/code-forge</a>
     </div>
+  </header>
 
-    <div class="group">
-      <h2>Connections</h2>
-      <div id="conn-toggles"></div>
-    </div>
+  <main class="app">
+    <aside class="sidebar" id="sidebar">
+      <button class="drawer-close" id="drawer-close" type="button" aria-label="Close menu">×</button>
 
-    <div class="comments">
-      <h2>Comments <span class="badge" id="cmt-count">0</span></h2>
-      <div id="comment-list"></div>
-    </div>
-  </aside>
+      <div class="group">
+        <h2>Preset views</h2>
+        <div class="preset-row" id="presets"></div>
+      </div>
 
-  <div class="canvas-wrap">
-    <div class="canvas">
-      <svg id="diagram" viewBox="0 0 1400 820" width="1400" height="820" preserveAspectRatio="xMinYMin meet" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <marker id="arrow-blue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-            <polygon points="0 0, 8 4, 0 8" fill="#6ea8fe"/>
-          </marker>
-          <marker id="arrow-green" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-            <polygon points="0 0, 8 4, 0 8" fill="#5cc8a4"/>
-          </marker>
-          <marker id="arrow-orange" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-            <polygon points="0 0, 8 4, 0 8" fill="#d4a35c"/>
-          </marker>
-          <marker id="arrow-red" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-            <polygon points="0 0, 8 4, 0 8" fill="#e5736b"/>
-          </marker>
-          <marker id="arrow-gray" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-            <polygon points="0 0, 8 4, 0 8" fill="#8b8e97"/>
-          </marker>
-        </defs>
+      <div class="group">
+        <h2>Layers</h2>
+        <div id="layer-toggles"></div>
+      </div>
 
-        <g id="lanes"></g>
-        <g id="connections"></g>
-        <g id="nodes"></g>
-      </svg>
-      <div class="legend">
-        <div class="legend-row"><span class="legend-line" style="border-color:#6ea8fe"></span> phase order</div>
-        <div class="legend-row"><span class="legend-line" style="border-color:#5cc8a4; border-style:dashed"></span> agent owns phase</div>
-        <div class="legend-row"><span class="legend-line" style="border-color:#d4a35c; border-style:dashed"></span> script gates phase</div>
-        <div class="legend-row"><span class="legend-line" style="border-color:#e5736b; border-style:dotted"></span> hook blocks</div>
-        <div class="legend-row"><span class="legend-line" style="border-color:#8b8e97; border-style:dotted"></span> writes artifact</div>
+      <div class="group">
+        <h2>Connections</h2>
+        <div id="conn-toggles"></div>
+      </div>
+
+      <div class="comments">
+        <h2>Comments <span class="badge" id="cmt-count">0</span></h2>
+        <div id="comment-list"></div>
+      </div>
+    </aside>
+
+    <div class="canvas-wrap">
+      <button class="drawer-open" id="drawer-open" type="button" aria-label="Open menu">≡ Controls</button>
+      <div class="canvas">
+        <svg id="diagram" viewBox="0 0 1400 820" width="1400" height="820" preserveAspectRatio="xMinYMin meet" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrow-blue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><polygon points="0 0, 8 4, 0 8" fill="#6ea8fe"/></marker>
+            <marker id="arrow-green" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><polygon points="0 0, 8 4, 0 8" fill="#5cc8a4"/></marker>
+            <marker id="arrow-orange" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><polygon points="0 0, 8 4, 0 8" fill="#d4a35c"/></marker>
+            <marker id="arrow-red" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><polygon points="0 0, 8 4, 0 8" fill="#e5736b"/></marker>
+            <marker id="arrow-gray" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><polygon points="0 0, 8 4, 0 8" fill="#8b8e97"/></marker>
+            <linearGradient id="band-pre" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#6ea8fe" stop-opacity="0.16"/>
+              <stop offset="100%" stop-color="#6ea8fe" stop-opacity="0.05"/>
+            </linearGradient>
+            <linearGradient id="band-cycle" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#b882fe" stop-opacity="0.16"/>
+              <stop offset="100%" stop-color="#b882fe" stop-opacity="0.05"/>
+            </linearGradient>
+            <linearGradient id="band-post" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#e582c8" stop-opacity="0.14"/>
+              <stop offset="100%" stop-color="#e582c8" stop-opacity="0.04"/>
+            </linearGradient>
+          </defs>
+
+          <g id="lanes"></g>
+          <g id="connections"></g>
+          <g id="nodes"></g>
+        </svg>
+        <div class="legend">
+          <div class="legend-row"><span class="legend-line" style="border-color:#6ea8fe"></span> <strong>phase order</strong></div>
+          <div class="legend-row"><span class="legend-line" style="border-color:#5cc8a4; border-style:dashed"></span> agent owns phase</div>
+          <div class="legend-row"><span class="legend-line" style="border-color:#d4a35c; border-style:dashed"></span> script gates phase</div>
+          <div class="legend-row"><span class="legend-line" style="border-color:#e5736b; border-style:dotted"></span> hook blocks</div>
+          <div class="legend-row"><span class="legend-line" style="border-color:#8b8e97; border-style:dotted"></span> writes artifact</div>
+        </div>
+      </div>
+
+      <div class="statusbar" role="status" aria-live="polite">
+        <span class="status-pill"><span class="dot"></span> Preset: <strong id="st-preset">Full system</strong></span>
+        <span class="status-sep">·</span>
+        <span><strong id="st-nodes">0</strong> nodes visible</span>
+        <span class="status-sep">·</span>
+        <span><strong id="st-comments">0</strong> notes pinned</span>
+        <span class="status-spacer"></span>
+        <span class="status-hint" id="st-hint">→ click a node to ask a question</span>
+      </div>
+
+      <div class="promptbar">
+        <div class="prompt-box" id="prompt"></div>
+        <button class="copy-btn" id="copy" type="button">Copy prompt</button>
       </div>
     </div>
+  </main>
+</div>
 
-    <div class="promptbar">
-      <div class="prompt-box" id="prompt"></div>
-      <button class="copy-btn" id="copy">Copy Prompt</button>
+<div class="scrim" id="scrim"></div>
+
+<div class="modal-bg" id="modal-bg" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title" id="modal-title">Add a note</div>
+        <div class="modal-target" id="modal-target"></div>
+      </div>
+      <button class="modal-x" id="modal-cancel" type="button" aria-label="Close">×</button>
+    </div>
+    <div class="modal-meta" id="modal-meta"></div>
+    <textarea id="modal-input" placeholder="What do you want to ask about this component? Questions, concerns, suggested changes — they roll into a copyable prompt."></textarea>
+    <div class="modal-actions">
+      <button class="modal-btn danger" id="modal-delete" type="button" hidden>Delete</button>
+      <span class="status-spacer"></span>
+      <button class="modal-btn" id="modal-cancel-2" type="button">Cancel</button>
+      <button class="modal-btn primary" id="modal-save" type="button">Save note</button>
     </div>
   </div>
 </div>
 
-<div class="modal-bg" id="modal-bg">
-  <div class="modal">
-    <div class="modal-title" id="modal-title">Add a comment</div>
-    <div class="modal-target" id="modal-target"></div>
-    <div class="modal-meta" id="modal-meta"></div>
-    <textarea id="modal-input" placeholder="What do you want to say about this component? (questions, concerns, suggested changes…)"></textarea>
-    <div class="modal-actions">
-      <button class="modal-btn danger" id="modal-delete" style="display:none">Delete</button>
-      <button class="modal-btn" id="modal-cancel">Cancel</button>
-      <button class="modal-btn primary" id="modal-save">Save</button>
+<div class="intro-bg" id="intro-bg" role="dialog" aria-modal="true" aria-labelledby="intro-title">
+  <div class="intro">
+    <div class="intro-eyebrow">First time here?</div>
+    <h2 class="intro-title" id="intro-title">A cycle the agent can't fake.</h2>
+    <p class="intro-lead">code-forge runs three planning phases, then loops a five-phase cycle until the spec is built, then proves it works end to end. Every phase emits a verifiable artifact. Every advancement gate is enforced by a script or a hook, not by agent memory.</p>
+    <ol class="intro-steps">
+      <li><strong>Pre-cycle (3).</strong> Plan → Spec & e2e → Cycle plan. Codex cross-checks each gate.</li>
+      <li><strong>Per-cycle (5).</strong> Contract → test-list → red → green → review. Loops until cycles are exhausted.</li>
+      <li><strong>Post-cycle (Phase F).</strong> e2e tests prove the whole thing actually works.</li>
+    </ol>
+    <p class="intro-tip">Try the <span class="kbd">Cycle flow</span> preset on the left to see the loop highlighted, or click any node for inputs, outputs, and constraints.</p>
+    <div class="intro-actions">
+      <button class="intro-skip" id="intro-skip" type="button">Skip — let me just explore</button>
+      <button class="intro-cta" id="intro-cta" type="button">Got it</button>
     </div>
   </div>
 </div>
 
 <script>
 //
-// ---------------- DATA ----------------
+// ---------------- DATA (preserved exactly from prior version) ----------------
 //
 
 const LAYERS = [
@@ -218,6 +1093,7 @@ const CONN_TYPES = [
   { id: 'writes',  label: 'Writes artifact',     color: '#8b8e97', dash: '1,4', on: false },
 ];
 
+// canvas height is now 880 to make room for the bigger numerals + divider band
 const LANES = [
   { y:  20, h: 110, label: 'PRE-CYCLE PHASES (compressed 7→3 in v0.2.0)',  layer: 'pre' },
   { y: 150, h: 110, label: 'PER-CYCLE PHASES (the v2 loop)',                layer: 'cycle' },
@@ -352,6 +1228,11 @@ const PRESET_BTNS = [
   { id: 'hooks',   label: 'Hook discipline' },
 ];
 
+// Lane decoration: which lanes are "control plane" vs "enforcement plane",
+// and the oversize numerals/letter that sit behind the band.
+const CONTROL_LANES = new Set(['pre','cycle','post']);
+const LANE_NUMERAL = { pre: '01', cycle: '02', post: 'F' };
+
 //
 // ---------------- STATE ----------------
 //
@@ -363,6 +1244,7 @@ const state = {
   comments: [],
   spotlight: null,
   modalNodeId: null,
+  hoverNodeId: null,
 };
 
 const NODE_BY_ID = Object.fromEntries(NODES.map(n => [n.id, n]));
@@ -393,23 +1275,73 @@ const nodesEl = document.getElementById('nodes');
 
 function renderLanes() {
   clearChildren(lanesEl);
-  LANES.forEach(L => {
-    if (!state.layers[L.layer]) return;
+  // Find the y boundary between control plane and enforcement plane.
+  // Anything with layer in CONTROL_LANES is "above the line"; everything else below.
+  const visibleLanes = LANES.filter(L => state.layers[L.layer]);
+  const lastControlLane = [...visibleLanes].reverse().find(L => CONTROL_LANES.has(L.layer));
+  const firstEnforcementLane = visibleLanes.find(L => !CONTROL_LANES.has(L.layer));
+
+  visibleLanes.forEach(L => {
+    const isControl = CONTROL_LANES.has(L.layer);
+
+    // background band
     const r = ns('rect');
-    r.setAttribute('class','lane-bg');
+    r.setAttribute('class','lane-band');
     r.setAttribute('x', 10);
     r.setAttribute('y', L.y);
     r.setAttribute('width', 1380);
     r.setAttribute('height', L.h);
-    r.setAttribute('rx', 8);
+    r.setAttribute('rx', 12);
+    if (L.layer === 'pre')   r.setAttribute('fill', 'url(#band-pre)');
+    else if (L.layer === 'cycle') r.setAttribute('fill', 'url(#band-cycle)');
+    else if (L.layer === 'post')  r.setAttribute('fill', 'url(#band-post)');
+    else                          r.setAttribute('fill', 'rgba(255,255,255,0.018)');
+    r.setAttribute('stroke', isControl ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.04)');
+    r.setAttribute('stroke-width', 1);
     lanesEl.appendChild(r);
+
+    // big background numeral for control-plane lanes
+    if (isControl && LANE_NUMERAL[L.layer]) {
+      const num = ns('text');
+      num.setAttribute('class', 'lane-numeral lane-numeral-' + L.layer);
+      num.setAttribute('x', 1370);
+      num.setAttribute('y', L.y + L.h / 2 + 30);
+      num.setAttribute('text-anchor', 'end');
+      num.textContent = LANE_NUMERAL[L.layer];
+      lanesEl.appendChild(num);
+    }
+
+    // primary lane label (top-left)
     const t = ns('text');
-    t.setAttribute('class','lane-label');
-    t.setAttribute('x', 20);
-    t.setAttribute('y', L.y + 14);
+    t.setAttribute('class', 'lane-label');
+    t.setAttribute('x', 22);
+    t.setAttribute('y', L.y + 18);
     t.textContent = L.label;
     lanesEl.appendChild(t);
   });
+
+  // divider band between control plane and enforcement plane
+  if (lastControlLane && firstEnforcementLane) {
+    const dy = lastControlLane.y + lastControlLane.h;
+    const gap = firstEnforcementLane.y - dy;
+    if (gap > 4) {
+      const yMid = dy + gap / 2;
+      const ln = ns('line');
+      ln.setAttribute('class','lane-divider');
+      ln.setAttribute('x1', 10); ln.setAttribute('x2', 1390);
+      ln.setAttribute('y1', yMid); ln.setAttribute('y2', yMid);
+      ln.setAttribute('stroke-dasharray', '2 6');
+      lanesEl.appendChild(ln);
+
+      const lbl = ns('text');
+      lbl.setAttribute('class','lane-divider-label');
+      lbl.setAttribute('x', 700);
+      lbl.setAttribute('y', yMid - 6);
+      lbl.setAttribute('text-anchor','middle');
+      lbl.textContent = 'enforcement plane — agents · scripts · hooks';
+      lanesEl.appendChild(lbl);
+    }
+  }
 }
 
 function bezierPath(x1,y1,x2,y2, dy = 30) {
@@ -438,6 +1370,17 @@ function connEndpoints(from, to) {
   return { x1, y1, x2, y2 };
 }
 
+function connOpacity(from, to, mod) {
+  // Hover priority: highlight only edges touching the hovered node.
+  if (state.hoverNodeId) {
+    if (from === state.hoverNodeId || to === state.hoverNodeId) return 0.95;
+    return 0.06;
+  }
+  if (mod === 'thin') return 0.32;
+  if (isSpotlit(from) && isSpotlit(to)) return 0.85;
+  return 0.16;
+}
+
 function renderConnections() {
   clearChildren(connsEl);
   CONNS.forEach(c => {
@@ -453,11 +1396,15 @@ function renderConnections() {
     p.setAttribute('d', d);
     p.setAttribute('fill','none');
     p.setAttribute('stroke', ct.color);
-    p.setAttribute('stroke-width', mod === 'thin' ? 1 : 1.6);
-    if (ct.dash !== '0') p.setAttribute('stroke-dasharray', ct.dash);
+    p.setAttribute('stroke-width', mod === 'thin' ? 1 : (mod === 'loop' ? 2 : 1.6));
+    if (mod === 'loop') {
+      p.setAttribute('class', 'conn-loop');
+    } else if (ct.dash !== '0') {
+      p.setAttribute('stroke-dasharray', ct.dash);
+    }
     const arrowSuffix = type === 'order' ? 'blue' : type === 'owns' ? 'green' : type === 'gates' ? 'orange' : type === 'blocks' ? 'red' : 'gray';
     p.setAttribute('marker-end', 'url(#arrow-' + arrowSuffix + ')');
-    p.setAttribute('opacity', mod === 'thin' ? 0.35 : (isSpotlit(from) && isSpotlit(to) ? 0.85 : 0.18));
+    p.setAttribute('opacity', connOpacity(from, to, mod));
     connsEl.appendChild(p);
   });
 }
@@ -471,21 +1418,26 @@ function renderNodes() {
     g.setAttribute('transform', 'translate(' + n.x + ',' + n.y + ')');
     g.dataset.id = n.id;
 
+    const isMonoLabel = ['contract','test-list','red','green','consolidated','plan','spec-e2e','cycle-plan','phase-f'].indexOf(n.id) === -1
+      && (n.id.startsWith('sc-') || n.id === 'forge-guard' || n.id === 'orchestrator' || n.id === 'planner' || n.id === 'test-author' || n.id === 'implementer' || n.id === 'impl-worker' || n.id === 'reviewer-fan' || n.id === 'consolidator' || n.id === 'codebase-exp' || n.id === 'chrome-mcp' || n.id === 'e2e-scenarios' || n.id === 'e2e-pass');
+
     const r = ns('rect');
     r.setAttribute('class','node-bg');
     r.setAttribute('width', n.w);
     r.setAttribute('height', n.h);
-    r.setAttribute('rx', 8);
+    r.setAttribute('rx', 9);
     r.setAttribute('fill', LAYER_COLOR[n.layer]);
-    r.setAttribute('stroke', isSpotlit(n.id) ? 'rgba(255,255,255,0.32)' : 'rgba(255,255,255,0.08)');
+    const spotlit = isSpotlit(n.id);
+    r.setAttribute('stroke', spotlit ? 'rgba(255,255,255,0.34)' : 'rgba(255,255,255,0.08)');
     r.setAttribute('stroke-width', 1.2);
-    r.setAttribute('opacity', isSpotlit(n.id) ? 1 : 0.45);
+    r.setAttribute('opacity', spotlit ? 1 : 0.42);
     g.appendChild(r);
 
+    // a thin top-edge accent on commented nodes is already handled via .commented class
     const t = ns('text');
-    t.setAttribute('class','node-label');
-    t.setAttribute('x', n.dim ? n.w/2 : 12);
-    t.setAttribute('y', n.dim ? n.h/2 + 4 : 22);
+    t.setAttribute('class', isMonoLabel ? 'node-label-mono' : 'node-label');
+    t.setAttribute('x', n.dim ? n.w/2 : 14);
+    t.setAttribute('y', n.dim ? n.h/2 + 4 : 24);
     t.setAttribute('text-anchor', n.dim ? 'middle' : 'start');
     t.textContent = n.label;
     g.appendChild(t);
@@ -493,14 +1445,14 @@ function renderNodes() {
     if (!n.dim) {
       const sub = ns('text');
       sub.setAttribute('class','node-sub');
-      sub.setAttribute('x', 12);
+      sub.setAttribute('x', 14);
       sub.setAttribute('y', n.h - 12);
       sub.textContent = n.sub;
       g.appendChild(sub);
     } else {
       const idx = ns('text');
       idx.setAttribute('class','node-sub');
-      idx.setAttribute('x', n.w - 16);
+      idx.setAttribute('x', n.w - 14);
       idx.setAttribute('y', n.h/2 + 3);
       idx.setAttribute('text-anchor','end');
       idx.textContent = n.sub;
@@ -509,23 +1461,31 @@ function renderNodes() {
 
     if (n.badge) {
       const b = ns('rect');
-      b.setAttribute('x', n.w - 32);
-      b.setAttribute('y', 8);
-      b.setAttribute('width', 24);
-      b.setAttribute('height', 16);
+      b.setAttribute('x', n.w - 36);
+      b.setAttribute('y', 9);
+      b.setAttribute('width', 28);
+      b.setAttribute('height', 17);
       b.setAttribute('rx', 8);
       b.setAttribute('fill', '#5cc8a4');
       g.appendChild(b);
       const bt = ns('text');
       bt.setAttribute('class','node-badge');
-      bt.setAttribute('x', n.w - 20);
-      bt.setAttribute('y', 19);
+      bt.setAttribute('x', n.w - 22);
+      bt.setAttribute('y', 21);
       bt.setAttribute('text-anchor','middle');
       bt.textContent = n.badge;
       g.appendChild(bt);
     }
 
     g.addEventListener('click', () => openModal(n.id));
+    g.addEventListener('mouseenter', () => {
+      state.hoverNodeId = n.id;
+      renderConnections();
+    });
+    g.addEventListener('mouseleave', () => {
+      state.hoverNodeId = null;
+      renderConnections();
+    });
     nodesEl.appendChild(g);
   });
 }
@@ -537,6 +1497,7 @@ function renderAll() {
   updatePrompt();
   renderCommentList();
   renderPresetButtons();
+  updateStatusBar();
 }
 
 //
@@ -548,6 +1509,7 @@ function renderPresetButtons() {
   clearChildren(wrap);
   PRESET_BTNS.forEach(p => {
     const b = document.createElement('button');
+    b.type = 'button';
     b.className = 'preset' + (state.preset === p.id ? ' active' : '');
     b.textContent = p.label;
     b.addEventListener('click', () => applyPreset(p.id));
@@ -607,6 +1569,27 @@ function applyPreset(id) {
 }
 
 //
+// ---------------- STATUS BAR ----------------
+//
+
+function updateStatusBar() {
+  const presetLabel = (PRESET_BTNS.find(p => p.id === state.preset) || {}).label || 'Custom';
+  const visibleNodes = NODES.filter(visibleNode).length;
+  document.getElementById('st-preset').textContent = presetLabel;
+  document.getElementById('st-nodes').textContent = visibleNodes;
+  document.getElementById('st-comments').textContent = state.comments.length;
+
+  const hint = document.getElementById('st-hint');
+  if (state.comments.length === 0) {
+    hint.textContent = '→ click a node to ask a question';
+    hint.style.color = '';
+  } else {
+    hint.textContent = '✓ ready — copy the prompt to bring your notes back to Claude';
+    hint.style.color = 'var(--good)';
+  }
+}
+
+//
 // ---------------- MODAL ----------------
 //
 
@@ -617,21 +1600,26 @@ const modalMeta = document.getElementById('modal-meta');
 const modalInput = document.getElementById('modal-input');
 const modalSave = document.getElementById('modal-save');
 const modalCancel = document.getElementById('modal-cancel');
+const modalCancel2 = document.getElementById('modal-cancel-2');
 const modalDelete = document.getElementById('modal-delete');
 
-function appendMetaRow(parent, key, value) {
+function appendMetaRow(parent, key, value, opts) {
   if (!value) return;
   const row = document.createElement('div');
   row.className = 'modal-meta-row';
-  const k = document.createElement('strong');
-  k.textContent = key + ': ';
+  const k = document.createElement('div');
+  k.className = 'modal-meta-key';
+  k.textContent = key;
   row.appendChild(k);
+  const v = document.createElement('div');
+  v.className = 'modal-meta-value' + (opts && opts.mono ? ' mono' : '');
   // value may include newlines — split into separate text/br nodes
   const lines = String(value).split('\n');
   lines.forEach((line, i) => {
-    if (i > 0) row.appendChild(document.createElement('br'));
-    row.appendChild(document.createTextNode(line));
+    if (i > 0) v.appendChild(document.createElement('br'));
+    v.appendChild(document.createTextNode(line));
   });
+  row.appendChild(v);
   parent.appendChild(row);
 }
 
@@ -644,14 +1632,14 @@ function openModal(nodeId) {
   appendMetaRow(modalMeta, 'Role', info.role);
   appendMetaRow(modalMeta, 'Owner', info.owner);
   appendMetaRow(modalMeta, 'Constraint', info.constraint);
-  appendMetaRow(modalMeta, 'Output', info.output);
+  appendMetaRow(modalMeta, 'Output', info.output, { mono: true });
   appendMetaRow(modalMeta, 'Note', info.note);
-  appendMetaRow(modalMeta, 'File', info.files);
+  appendMetaRow(modalMeta, 'File', info.files, { mono: true });
 
   const existing = state.comments.find(c => c.target === nodeId);
   modalInput.value = existing ? existing.text : '';
-  modalDelete.style.display = existing ? '' : 'none';
-  modalTitle.textContent = existing ? 'Edit comment' : 'Add a comment';
+  modalDelete.hidden = !existing;
+  modalTitle.textContent = existing ? 'Edit note' : 'Add a note';
   modalBg.classList.add('show');
   setTimeout(() => modalInput.focus(), 0);
 }
@@ -662,8 +1650,17 @@ function closeModal() {
 }
 
 modalCancel.addEventListener('click', closeModal);
+modalCancel2.addEventListener('click', closeModal);
 modalBg.addEventListener('click', (e) => { if (e.target === modalBg) closeModal(); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (introBg.classList.contains('show')) hideIntro();
+    else closeModal();
+  }
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && modalBg.classList.contains('show')) {
+    modalSave.click();
+  }
+});
 
 modalSave.addEventListener('click', () => {
   const text = modalInput.value.trim();
@@ -692,7 +1689,15 @@ function renderCommentList() {
   if (state.comments.length === 0) {
     const e = document.createElement('div');
     e.className = 'empty-state';
-    e.textContent = 'Click any node in the diagram to add a question or note. Comments roll into the prompt.';
+    const line1 = document.createElement('div');
+    line1.textContent = 'No notes yet.';
+    line1.style.marginBottom = '4px';
+    line1.style.color = 'var(--fg-soft)';
+    line1.style.fontWeight = '600';
+    const line2 = document.createElement('div');
+    line2.textContent = 'Click any node to ask a question. Notes roll into a copyable prompt below — paste it back to Claude when you want to dig deeper.';
+    e.appendChild(line1);
+    e.appendChild(line2);
     list.appendChild(e);
     return;
   }
@@ -706,6 +1711,7 @@ function renderCommentList() {
     txt.className = 'comment-text';
     txt.textContent = c.text;
     const del = document.createElement('button');
+    del.type = 'button';
     del.className = 'comment-del';
     del.textContent = 'remove';
     del.addEventListener('click', () => {
@@ -753,9 +1759,55 @@ document.getElementById('copy').addEventListener('click', async () => {
     setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1200);
   } catch (e) {
     btn.textContent = 'Copy failed';
-    setTimeout(() => { btn.textContent = 'Copy Prompt'; }, 1500);
+    setTimeout(() => { btn.textContent = 'Copy prompt'; }, 1500);
   }
 });
+
+//
+// ---------------- INTRO MODAL ----------------
+//
+
+const introBg = document.getElementById('intro-bg');
+const introCta = document.getElementById('intro-cta');
+const introSkip = document.getElementById('intro-skip');
+const showIntroBtn = document.getElementById('show-intro');
+
+const SEEN_KEY = 'cfv2-intro-seen-v2';
+
+function showIntro() { introBg.classList.add('show'); }
+function hideIntro() { introBg.classList.remove('show'); try { localStorage.setItem(SEEN_KEY, '1'); } catch (e) {} }
+
+introCta.addEventListener('click', hideIntro);
+introSkip.addEventListener('click', hideIntro);
+introBg.addEventListener('click', (e) => { if (e.target === introBg) hideIntro(); });
+showIntroBtn.addEventListener('click', showIntro);
+
+function maybeShowIntroOnLoad() {
+  let seen = false;
+  try { seen = localStorage.getItem(SEEN_KEY) === '1'; } catch (e) {}
+  if (!seen) showIntro();
+}
+
+//
+// ---------------- DRAWER (narrow viewport) ----------------
+//
+
+const sidebar = document.getElementById('sidebar');
+const drawerOpen = document.getElementById('drawer-open');
+const drawerClose = document.getElementById('drawer-close');
+const scrim = document.getElementById('scrim');
+
+function openDrawer() {
+  sidebar.classList.add('open');
+  scrim.classList.add('show');
+}
+function closeDrawer() {
+  sidebar.classList.remove('open');
+  scrim.classList.remove('show');
+}
+drawerOpen.addEventListener('click', openDrawer);
+drawerClose.addEventListener('click', closeDrawer);
+scrim.addEventListener('click', closeDrawer);
 
 //
 // ---------------- INIT ----------------
@@ -764,6 +1816,7 @@ document.getElementById('copy').addEventListener('click', async () => {
 renderLayerToggles();
 renderConnToggles();
 applyPreset('full');
+maybeShowIntroOnLoad();
 </script>
 </body>
 </html>
