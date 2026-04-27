@@ -1,6 +1,17 @@
 # Code Forge Rig — Enforcement-Hardened Multi-Agent Build System
 
-Code Forge enhanced with programmatic enforcement hooks inspired by [claude-rig](https://github.com/franklywatson/claude-rig). Same multi-agent protocol as [code-forge](../code-forge/), but with hook-based guardrails that prevent the orchestrator from drifting off-protocol during long sessions.
+> **⚠️ Doc currency.** This file describes the v1 code-forge-rig fork that v0.1.0 was based on. The v0.2.0+ shape (Phase 0/1/2 pre-cycle, best-of-N green, Phase F e2e, project_domain routing) lives in [`spec.md`](./spec.md) and [`docs/v0.2.0-build-report.md`](./docs/v0.2.0-build-report.md). This file will be rewritten in a later release.
+
+## Migrating from v0.2.0 → v0.3.x
+
+v0.3.x adds a required `test_file` field to `tests.json`'s schema (alongside the existing `target_file`). The `checkTestFileEditDuringGreen` hook now reads `test_file` instead of `target_file`, restoring the anti-weakening rule. **This is a forward-only schema change.** If you have an in-flight `.forge/` directory from a v0.2.0 run:
+
+- **Easiest**: let the cycle complete on the v0.2.0 plugin (the deployed copy will still resolve the old schema), then deploy v0.3.x and start a fresh `/forge` invocation for new work.
+- **Otherwise**: hand-add a `test_file` value to every entry in `.forge/cycles/N/tests.json` before resuming. The path should be the actual test file (e.g. `tests/foo.test.ts`), not the source under test. `cycle-validate.sh` will reject the file until both fields are present.
+
+No migration is needed for fresh runs started on v0.3.x — the planner and test-author prompts emit both fields.
+
+---
 
 ## Why This Variant Exists
 

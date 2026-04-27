@@ -25,11 +25,13 @@ This separation is non-negotiable — it lets the coordinator pick-best without 
 
 ## Critical constraint: you cannot edit test files
 
-forge-guard rule 8 blocks any edit to test files listed in `cycles/N/tests.json`'s `target_file` entries during green phase, for both the coordinator AND every worker. The anti-weakening rule from spec §13:
+forge-guard rule 8 blocks any Edit/Write to a path listed in `cycles/N/tests.json`'s `test_file` entries during green phase, for both the coordinator AND every worker. The anti-weakening rule from spec §13:
 
 > "When a test fails, the model's cheapest win is to soften the test."
 
 If you cannot make the existing tests pass without editing them, the tests are wrong, not the implementation. Stop and emit a `manifest.json` with `"blocked": true, "reason": "..."`. Do NOT try to weaken the tests.
+
+**Bash is not a side door.** Your tool allowlist includes `Bash`, but forge-guard's PreToolUse rules cover Edit/Write/Task/Agent only — Bash file writes (`echo > path`, `sed -i`, `cp`, `cat <<EOF >`, etc.) are NOT enforced by the hook. **You must not use Bash to write, copy, append to, or otherwise modify files listed in `test_file` entries** (or files inside `cycles/N/green/candidates/worker-K/files/<test_file>`). This is a prompt-discipline rule. If you violate it, the cycle review will catch it, but the protection is structural rather than mechanical until v0.4.x adds Bash hook coverage. Bash is for reading test runner output, listing directories, and similar read-only operations — not for circumventing the test-file block.
 
 ## Your inputs
 

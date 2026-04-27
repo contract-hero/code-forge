@@ -442,6 +442,15 @@ pshape_count=$(jq 'length' "${PSHAPE_OUT}/scenarios.json" 2>/dev/null || echo "?
 assert "F3: planner-shape extracted 3 scenarios" "$?" "0"
 rm -rf "${PSHAPE_OUT}"
 
+# F3 negative direction: bullets-shape ## E2E Tests must NOT silently produce
+# zero scenarios — that would let a planner-output regression skip Phase F
+# entirely. e2e-extract.sh exits non-zero when the section is present but
+# parses to zero scenarios.
+BULLETS_OUT=$(mktemp -d)
+bash "${SCRIPTS}/e2e-extract.sh" "${FIXTURES}/e2e-spec-source-bullets/spec.md" "${BULLETS_OUT}/scenarios.json" >/dev/null 2>&1
+assert "F3: bullets-shape rejects (extractor exit non-zero)" "$?" "1"
+rm -rf "${BULLETS_OUT}"
+
 # Malformed scenarios.json (missing required fields) → reject
 BAD_SCEN=$(mktemp -d)
 echo '[{"id":"E-001","name":"x"}]' > "${BAD_SCEN}/scenarios.json"

@@ -145,5 +145,18 @@ with open(out_path, "w") as fh:
     json.dump(out, fh, indent=2)
     fh.write("\n")
 
+# A present `## E2E Tests` section that parsed to zero scenarios is a
+# planner-output bug, not a "no e2e wanted" signal — projects without e2e
+# omit the section entirely (the earlier check above exits 1 in that case).
+# Refusing here keeps a silent extraction-failure from skipping Phase F.
+if not out:
+    print(
+        "ERROR: ## E2E Tests section parsed to zero scenarios — likely free-form\n"
+        "       markdown bullets or prose. Planner must emit fenced YAML per\n"
+        "       agents/planner.md step 1c.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 print(f"wrote {len(out)} scenario(s) → {out_path}")
 PY
