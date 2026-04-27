@@ -624,8 +624,16 @@ function checkSpecialistRouting(toolInput, forgeRoot) {
   const dispatchTarget = inferTargetFromTaskInput(toolInput);
   if (!dispatchTarget) return null;
 
+  const dispatchRole = inferRoleFromTaskInput(toolInput);
+
   for (const entry of required) {
     if (!entry.match || !entry.subagent_type) continue;
+    // Honor applies_to: a binding scoped to specific roles only fires when
+    // we can identify the role and it matches. If applies_to is unset, the
+    // binding applies to all roles.
+    if (Array.isArray(entry.applies_to) && entry.applies_to.length > 0) {
+      if (!dispatchRole || !entry.applies_to.includes(dispatchRole)) continue;
+    }
     if (matchesGlob(entry.match, dispatchTarget)) {
       if (subagentType !== entry.subagent_type) {
         return [
@@ -633,16 +641,39 @@ function checkSpecialistRouting(toolInput, forgeRoot) {
           "",
           `agent-config.md binds match="${entry.match}" → subagent_type="${entry.subagent_type}".`,
           `Inferred dispatch target: "${dispatchTarget}".`,
+          dispatchRole ? `Inferred role: "${dispatchRole}".` : "",
           "",
           `This Task call uses subagent_type="${subagentType || "<unset>"}".`,
           "",
           "Re-dispatch with the bound subagent_type, or update agent-config.md if",
           "the binding no longer reflects the intended routing.",
-        ].join("\n");
+        ].filter(Boolean).join("\n");
       }
       // First matching binding is authoritative.
       return null;
     }
+  }
+  return null;
+}
+
+// Best-effort role inference from a Task dispatch. Order: subagent_type
+// suffix (e.g. "code-forge-v2:forge-implementer-worker" → "implementer-worker"),
+// then a phrase in the prompt/description ("as planner", "as test-author",
+// etc.), then null. Used only to scope applies_to in routing rules.
+function inferRoleFromTaskInput(toolInput) {
+  const subagentType = String(toolInput.subagent_type || "");
+  if (subagentType) {
+    const m = /(?:^|[:\/])forge-([a-z-]+)$/.exec(subagentType);
+    if (m) return m[1];
+  }
+  const haystack = `${toolInput.description || ""}\n${toolInput.prompt || ""}`;
+  const ROLES = [
+    "planner", "implementer-worker", "implementer", "test-author",
+    "reviewer", "consolidator", "codebase-explorer",
+  ];
+  for (const role of ROLES) {
+    const re = new RegExp(`\\bas[\\s:]+${role}\\b|\\b${role}\\b`, "i");
+    if (re.test(haystack)) return role;
   }
   return null;
 }
@@ -666,7 +697,14 @@ function parseYamlList(fm, key) {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.startsWith("- "))
-    .map((line) => line.slice(2).trim().replace(/^["']|["']$/g, ""))
+    .map((line) => {
+      // Strip "- ", trailing inline comment, and surrounding quotes.
+      let v = line.slice(2);
+      const hash = v.indexOf("#");
+      if (hash >= 0) v = v.slice(0, hash);
+      v = v.trim().replace(/^["']|["']$/g, "");
+      return v;
+    })
     .filter((s) => s && !s.startsWith("#"));
 }
 

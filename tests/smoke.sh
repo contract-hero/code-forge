@@ -274,6 +274,26 @@ echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","promp
   | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
 assert "greenfield routing skips"            "$?" "0"
 
+# required_subagents glob fallback (no project_domains) — *.move + general-purpose → BLOCK
+cat > "${GUARD_TEST_DIR}/.forge/agent-config.md" << 'EOF'
+---
+project_domains: []
+required_subagents:
+  - match: "**/*.move"
+    subagent_type: "sui-pilot:sui-pilot-agent"
+    applies_to: [planner, implementer-worker, reviewer]
+recommended_agents: []
+---
+EOF
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","prompt":"As implementer-worker, edit src/foo.move","description":"x"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "glob fallback blocks .move on impl-worker" "$?" "2"
+
+# Same glob, but applies_to scope excludes consolidator — should not block consolidator
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","prompt":"as consolidator, summarize cycles/1/_consolidated.json against contract.md","description":"x"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "glob fallback respects applies_to scope" "$?" "0"
+
 rm -rf "$GUARD_TEST_DIR"
 echo ""
 

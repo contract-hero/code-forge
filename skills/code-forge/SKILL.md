@@ -120,22 +120,21 @@ The skill file does NOT paraphrase what these scripts do. The scripts are the pr
 
 ## Hook discipline (forge-guard)
 
-`hooks/forge-guard.mjs` codifies the protocol invariants:
+`hooks/forge-guard.mjs` codifies the protocol invariants. Each invariant maps to a function in the hook; the spec's §8 rule numbers and the hook's internal rule numbers were offset by four in v0.1.0 (the rig kept its original 1–4 numbering and v2 numbered the new rules 5–8 sequentially). The list below describes behavior; the function name is the source of truth.
 
 **Blocking rules (exit code 2 — tool call rejected):**
-- No implementation without contract (rule 1, carried from rig)
-- No advancing past a failed cycle review (rule 2, extended in v2 to use `_consolidated.json`)
-- Test-file edit block during green phase (rule 5, v2; extended in v0.2.0 to all 11 agents in the implementer family — coordinator + N workers — see rule 8)
-- Parallel reviewer fan-out enforcement (rule 3, v2) — blocks serial dispatch
-- Post-cycle freeze on contract files (rule 4, v2)
-- **Specialist routing (rule 6, v0.2.0)** — when `agent-config.md` declares a `project_domain` (e.g. `sui-dapp`) every Task dispatch must use the matching `subagent_type` (e.g. `sui-pilot:sui-pilot-agent`); also enforces `required_subagents` glob bindings as fallback.
-- **Implementer-worker fan-out (rule 7, v0.2.0)** — during green phase, blocks a second `implementer-worker` Task call dispatched after another worker's candidate directory has appeared.
+- `checkContractExists` — no implementation without a contract (carried from rig).
+- `checkPreviousCyclePassed` — no advancing past a failed cycle review (uses `_consolidated.json` in v2).
+- `checkTestFileEditDuringGreen` — during green phase, blocks edits to paths listed in `tests.json`'s `target_file` entries. Agent-blind (applies to the implementer coordinator AND every implementer-worker; the "extends to all 11 agents" claim in spec §0.C is satisfied without code changes).
+- `checkParallelReviewerFanout` — during `consolidated-review`, blocks a second `reviewer` Task dispatch after another reviewer's `subagent-N.json` has been live for >5s.
+- `checkPostCycleFreeze` — once a cycle's `_consolidated.json` is sealed, blocks edits to files named in that cycle's `contract.md` until the next cycle's `contract` phase.
+- `checkSpecialistRouting` (v0.2.0) — reads `agent-config.md`. If `project_domains` contains a sui-ecosystem domain (`sui-dapp`, `walrus`, `seal`, `sui-cli`), every Task dispatch must use `subagent_type="sui-pilot:sui-pilot-agent"`. Otherwise enforces `required_subagents[*].match` globs scoped by `applies_to`.
+- `checkWorkerFanout` (v0.2.0) — during green phase, blocks a second `implementer-worker` Task dispatch after another worker's candidate directory already exists.
 
 **Advisory rules (exit 0, message to stderr — does NOT block):**
-- Phase ordering / prerequisite-artifact checks (carried from rig)
-- Codex gate artifacts present (carried from rig; respects `--light` mode)
-- Auto-validate on schema artifact edits (rule 9, v2 — fires `cycle-validate.sh` on writes to schema-bearing files)
-- Phase 1 exit warning when cycle-plan has >1 cycle and `spec.md` lacks `## E2E Tests`
+- `checkPhaseTransitionV2` — phase ordering / prerequisite-artifact warnings on `state.json` writes (carried from rig).
+- `checkCodexGatesV2` — Codex-gate artifact presence at planning gates (respects `--light` mode).
+- `fireValidateOnSchemaArtifact` — fires `cycle-validate.sh` on edits to schema-bearing files (`tests.json`, `contract.md`, `subagent-*.json`, `agent-config.md`, `scenarios.json`, etc.).
 
 If you see `[BLOCK] Forge Guard:` the tool call has been rejected — fix the underlying issue, do not paper over it. If you see `[ADVISE] Forge Guard:` you should investigate; the call still went through.
 
