@@ -48,7 +48,10 @@ OVERALL=0
 validate_reviewer() {
   local f="$1"
   local n
-  n=$(basename "$f" | sed -n 's/^subagent-\([0-9]\+\)\.json$/\1/p')
+  # POSIX-portable: use [0-9][0-9]* instead of \+ (GNU-only). BSD sed on macOS
+  # treats \+ as literal '+', so the capture group never matches and reviewer
+  # ID prefix validation silently no-ops.
+  n=$(basename "$f" | sed -n 's/^subagent-\([0-9][0-9]*\)\.json$/\1/p')
   if [[ -z "$n" ]]; then
     echo "  SKIP: $f does not match subagent-N.json"
     return 0

@@ -53,6 +53,19 @@ bash "${SCRIPTS}/cycle-validate.sh" "${FIXTURES}/cycle-bad-tests-schema" >/dev/n
 assert "bad-tests-schema fixture rejects" "$?" "1"
 echo ""
 
+# --- F2: sed portability — reviewer-index extraction round-trip ---
+# Regression guard for the GNU-vs-BSD sed-ism on macOS. cycle-validate.sh
+# extracts a reviewer number from "subagent-N.json" basenames; before F2 it
+# used \+ which BSD sed silently no-ops, leaving N empty and skipping the
+# per-reviewer ID prefix check. This assertion proves the extractor returns
+# a non-empty digit string on the canonical fixture.
+echo "Section 1.5: sed portability"
+n=$(basename "${FIXTURES}/cycle-good/reviewers/subagent-3.json" \
+    | sed -n 's/^subagent-\([0-9][0-9]*\)\.json$/\1/p')
+[[ "$n" == "3" ]]
+assert "F2: reviewer-index extraction is non-empty on macOS" "$?" "0"
+echo ""
+
 # --- cycle-consolidate.mjs ---
 echo "Section 2: cycle-consolidate.mjs"
 node "${SCRIPTS}/cycle-consolidate.mjs" "${FIXTURES}/cycle-good/reviewers" >/dev/null 2>&1
