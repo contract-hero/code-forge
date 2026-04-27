@@ -696,8 +696,17 @@ function checkSpecialistRouting(toolInput, forgeRoot) {
   // No project_domain → fall back to required_subagents glob matches.
   if (required.length === 0) return null;
 
-  const dispatchTarget = inferTargetFromTaskInput(toolInput);
-  if (!dispatchTarget) return null;
+  // F12 (v0.4.x): match globs against the in-scope file list from the current
+  // cycle's contract.md, not against path-shaped tokens scraped from the
+  // dispatch prompt. Contract.md is authoritative; the prompt is incidental.
+  // Pre-cycle dispatches (current_cycle = 0 / no contract yet) skip the rule.
+  const state = readState(forgeRoot);
+  if (!state) return null;
+  const cycleN = Number(state.current_cycle || state.currentCycle || 0);
+  if (cycleN === 0) return null;
+  const contractPath = resolve(forgeRoot, "cycles", String(cycleN), "contract.md");
+  const contractTargets = listFilesInContract(contractPath);
+  if (contractTargets.length === 0) return null;
 
   const dispatchRole = inferRoleFromTaskInput(toolInput);
 
@@ -709,13 +718,15 @@ function checkSpecialistRouting(toolInput, forgeRoot) {
     if (Array.isArray(entry.applies_to) && entry.applies_to.length > 0) {
       if (!dispatchRole || !entry.applies_to.includes(dispatchRole)) continue;
     }
-    if (matchesGlob(entry.match, dispatchTarget)) {
+    // Match if ANY in-scope file from the contract hits this glob.
+    const matched = contractTargets.find((t) => matchesGlob(entry.match, t));
+    if (matched) {
       if (subagentType !== entry.subagent_type) {
         return [
           "[BLOCK] Forge Guard: specialist routing violated (required_subagents)",
           "",
           `agent-config.md binds match="${entry.match}" → subagent_type="${entry.subagent_type}".`,
-          `Inferred dispatch target: "${dispatchTarget}".`,
+          `Cycle ${cycleN}'s contract.md ## Files contains: "${matched}".`,
           dispatchRole ? `Inferred role: "${dispatchRole}".` : "",
           "",
           `This Task call uses subagent_type="${subagentType || "<unset>"}".`,
@@ -824,17 +835,6 @@ function parseRequiredSubagents(fm) {
   }
   if (inSection && current) out.push(current);
   return out;
-}
-
-function inferTargetFromTaskInput(toolInput) {
-  // Best-effort: the Task tool doesn't expose a target_file directly; look
-  // at the prompt for path-shaped tokens.
-  const prompt = String(toolInput.prompt || "");
-  const desc = String(toolInput.description || "");
-  const haystack = `${prompt}\n${desc}`;
-  const pathRe = /(?:^|[\s'"`(])([\w./-]+(?:\.\w+|\.toml))(?=[\s'"`)]|$)/m;
-  const m = pathRe.exec(haystack);
-  return m ? m[1] : null;
 }
 
 function matchesGlob(pattern, target) {

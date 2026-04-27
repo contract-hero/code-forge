@@ -338,7 +338,9 @@ echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","promp
   | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
 assert "greenfield routing skips"            "$?" "0"
 
-# required_subagents glob fallback (no project_domains) — *.move + general-purpose → BLOCK
+# F12 (v0.4.x): required_subagents glob fallback now matches against the in-scope
+# files listed in cycles/N/contract.md, not prompt-text path tokens. Set up a
+# minimal state.json + contract.md so the rule has something to read.
 cat > "${GUARD_TEST_DIR}/.forge/agent-config.md" << 'EOF'
 ---
 project_domains: []
@@ -349,14 +351,62 @@ required_subagents:
 recommended_agents: []
 ---
 EOF
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","prompt":"As implementer-worker, edit src/foo.move","description":"x"}}' \
-  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "glob fallback blocks .move on impl-worker" "$?" "2"
+mkdir -p "${GUARD_TEST_DIR}/.forge/cycles/1"
+cat > "${GUARD_TEST_DIR}/.forge/state.json" << 'JSON'
+{ "phase": "contract", "current_cycle": 1, "iteration": 0 }
+JSON
+cat > "${GUARD_TEST_DIR}/.forge/cycles/1/contract.md" << 'EOF'
+# Cycle 1 — sui contract
 
-# Same glob, but applies_to scope excludes consolidator — should not block consolidator
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","prompt":"as consolidator, summarize cycles/1/_consolidated.json against contract.md","description":"x"}}' \
+## Behavior
+Add a Move module that does X.
+
+## Files
+- src/foo.move
+- src/index.ts
+
+## Acceptance
+- foo.move compiles.
+EOF
+
+# F12: contract lists a .move file → glob match → impl-worker without sui-pilot BLOCKS
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-implementer-worker","prompt":"impl-worker","description":"x"}}' \
   | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "glob fallback respects applies_to scope" "$?" "0"
+assert "F12: glob fallback blocks via contract.md" "$?" "2"
+
+# F12: same glob, but applies_to scope excludes consolidator → ALLOW
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-consolidator","prompt":"consolidator","description":"x"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F12: applies_to scope respected" "$?" "0"
+
+# F12: pre-cycle dispatch (current_cycle=0, no contract.md to read) → SKIP rule, ALLOW
+cat > "${GUARD_TEST_DIR}/.forge/state.json" << 'JSON'
+{ "phase": "spec-and-e2e", "current_cycle": 0, "iteration": 0 }
+JSON
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-planner","prompt":"draft spec.md","description":"planner"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F12: pre-cycle dispatch skips rule"  "$?" "0"
+
+# F12: contract has no matching files → ALLOW (no .move in this contract)
+cat > "${GUARD_TEST_DIR}/.forge/state.json" << 'JSON'
+{ "phase": "contract", "current_cycle": 1, "iteration": 0 }
+JSON
+cat > "${GUARD_TEST_DIR}/.forge/cycles/1/contract.md" << 'EOF'
+# Cycle 1 — pure TS contract
+
+## Behavior
+Add a TypeScript helper.
+
+## Files
+- src/foo.ts
+- tests/foo.test.ts
+
+## Acceptance
+- helper does Y.
+EOF
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","prompt":"impl-worker","description":"x"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F12: contract with no matching file allows" "$?" "0"
 
 rm -rf "$GUARD_TEST_DIR"
 echo ""
