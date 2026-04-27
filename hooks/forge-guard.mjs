@@ -474,6 +474,108 @@ function checkTestFileEditDuringGreen(filePath, forgeRoot) {
 }
 
 /**
+ * F10 (v0.4.x): Bash hook coverage during green.
+ *
+ * Edit/Write tool calls to test_file paths are blocked during green by
+ * checkTestFileEditDuringGreen (rule 5/8). But workers' tool allowlist
+ * includes Bash, which is a side door — `echo > test/foo.test.ts`,
+ * `sed -i test/foo.test.ts`, `cp src/x test/foo.test.ts`, and so on can
+ * write test files without triggering Edit/Write hooks.
+ *
+ * This check parses the Bash command for the obvious file-creating patterns
+ * and blocks when the resolved target is in the test_file set or matches a
+ * test_file via the worker candidate-staging prefix-peel.
+ *
+ * The parser is heuristic — accept some false negatives (multi-arg cp -t,
+ * shell quoting around the redirect target, etc.). Layered defense: F4 +
+ * rule 5/8 + F10 prompt-side guidance in agents/implementer-worker.md +
+ * the cycle-review pass that follows green. Don't claim completeness.
+ */
+function checkBashFileWriteDuringGreen(toolInput, forgeRoot) {
+  if (!toolInput) return null;
+  const command = String(toolInput.command || "");
+  if (!command) return null;
+
+  if (!forgeRoot) {
+    const possibleForge = resolve(process.cwd(), ".forge");
+    if (!existsSync(possibleForge)) return null;
+    forgeRoot = possibleForge;
+  }
+  const state = readState(forgeRoot);
+  if (!state) return null;
+  if ((state.phase || "") !== "green") return null;
+
+  const cycleN = state.current_cycle || state.currentCycle || 1;
+  const cycleDir = resolve(forgeRoot, "cycles", String(cycleN));
+  const tests = loadTestsJson(cycleDir);
+  if (tests.length === 0) return null;
+
+  const testFiles = new Set(tests.map((t) => t.test_file).filter(Boolean));
+  if (testFiles.size === 0) return null;
+
+  const writeTargets = extractBashWriteTargets(command);
+  if (writeTargets.length === 0) return null;
+
+  const repoRoot = resolve(forgeRoot, "..");
+  for (const t of writeTargets) {
+    // The target may be relative to cwd; resolve against repoRoot for the
+    // string-prefix path normalization step.
+    const abs = t.startsWith("/") ? t : resolve(repoRoot, t);
+    const rel = makeRepoRelative(abs, repoRoot);
+    const residue = peelCandidatePrefix(rel);
+    const matched = testFiles.has(rel) ? rel : (residue && testFiles.has(residue) ? residue : null);
+    if (matched) {
+      return [
+        "[BLOCK] Forge Guard: Bash file-write to test-file path during green",
+        "",
+        `Cycle ${cycleN} is in 'green' phase. Bash commands cannot write to`,
+        `paths listed in tests.json's test_file entries — that's the`,
+        `anti-weakening rule, applied to Bash to close the F4 worker side door.`,
+        "",
+        `Blocked target:    ${t}`,
+        `Resolved test_file: ${matched}`,
+        "",
+        "If you need to write a non-test file, target a target_file path or any",
+        "other repo path. If the test is genuinely wrong, escalate to the",
+        "orchestrator (rolls back to test-list); don't patch tests during green.",
+      ].join("\n");
+    }
+  }
+  return null;
+}
+
+// Heuristic: extract paths the command would write to.
+// Patterns covered:
+//   - `> path` and `>> path` redirects (single command; ignores quoted strings)
+//   - `| tee path` and `| tee -a path`
+//   - `cp src dst` and `mv src dst` (last positional arg = destination;
+//     multi-arg `-t` form is missed — known limitation)
+//   - `sed -i path` and `sed -i.bak path`
+function extractBashWriteTargets(command) {
+  const targets = [];
+  const stripQuotes = (s) => s.replace(/^["']|["']$/g, "");
+
+  // Output redirects: `cmd > path` or `cmd >> path`. Also `| tee [-a] path`.
+  // We deliberately keep this regex narrow — pattern hunts for the redirect
+  // operator near the END of a command segment, not anywhere it might appear
+  // inside a quoted string. Acceptable false-negatives over false-positives.
+  for (const m of command.matchAll(/(?:^|[^&|>])(?:>>?|\|\s*tee\s+(?:-a\s+)?)\s*([^\s;&|<>]+)/g)) {
+    targets.push(stripQuotes(m[1]));
+  }
+  // cp / mv: take the last whitespace-separated token before a terminator as
+  // the destination. Misses `-t DEST src1 src2` and complex flag arrangements;
+  // accept that.
+  for (const m of command.matchAll(/\b(?:cp|mv)\s+(?:-[a-zA-Z]+\s+)*[^\s;&|<>]+\s+([^\s;&|<>]+)/g)) {
+    targets.push(stripQuotes(m[1]));
+  }
+  // sed -i path and sed -i.bak path. The script-arg may be quoted.
+  for (const m of command.matchAll(/\bsed\s+(?:-[a-zA-Z]+\s+)*-i(?:\.\w+)?\s+(?:-[a-zA-Z]+\s+)*(?:'[^']*'|"[^"]*"|[^\s;&|<>]+)\s+([^\s;&|<>]+)/g)) {
+    targets.push(stripQuotes(m[1]));
+  }
+  return targets;
+}
+
+/**
  * Rule 6: Parallel reviewer fan-out enforcement.
  * Block second `reviewer` Agent dispatch if previous reviewer's output
  * appeared more than 5 seconds ago — that means dispatch is serial, not
@@ -1007,6 +1109,12 @@ async function main() {
     if (toolName === "Edit" || toolName === "Write") {
       violations.push(checkTestFileEditDuringGreen(filePath, forgeRoot));
       violations.push(checkPostCycleFreeze(filePath, forgeRoot));
+    }
+
+    // F10 (v0.4.x): Bash file-writes to test_file paths during green close
+    // the side door that Edit/Write hooks miss. Heuristic-only.
+    if (toolName === "Bash") {
+      violations.push(checkBashFileWriteDuringGreen(toolInput, forgeRoot));
     }
 
     // v2 rule 3 — parallel reviewer fan-out

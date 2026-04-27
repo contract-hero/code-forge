@@ -3,7 +3,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Write|Edit|Task|Agent",
+        "matcher": "Write|Edit|Task|Agent|Bash",
         "hooks": [
           {
             "type": "command",

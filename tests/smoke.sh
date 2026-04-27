@@ -632,6 +632,43 @@ assert "F9: forge-status.sh renders PAUSED banner" "$?" "0"
 rm -rf "$F9_DIR"
 echo ""
 
+# --- F10: Bash hook coverage during green ---
+echo "Section 11.9: F10 — Bash file-writes blocked during green"
+F10_DIR=$(setup_green_phase_fixture "tests/foo.test.ts" "src/foo.ts")
+
+# `> path` redirect to a test_file → BLOCK
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo trivial > tests/foo.test.ts\"}}" \
+  | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F10: Bash > to test_file blocks"   "$?" "2"
+
+# `>> path` append to a test_file → BLOCK
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo extra >> tests/foo.test.ts\"}}" \
+  | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F10: Bash >> to test_file blocks"  "$?" "2"
+
+# `cp src dst` where dst is a test_file → BLOCK
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cp src/something tests/foo.test.ts\"}}" \
+  | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F10: Bash cp to test_file blocks"  "$?" "2"
+
+# `sed -i path` on a test_file → BLOCK
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sed -i 's/expect/skip/' tests/foo.test.ts\"}}" \
+  | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F10: Bash sed -i on test_file blocks" "$?" "2"
+
+# `> path` redirect to a SOURCE file → ALLOW (not a test path)
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo content > src/foo.ts\"}}" \
+  | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F10: Bash > to source path allows" "$?" "0"
+
+# `pnpm test` (no file-write pattern) → ALLOW
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pnpm test\"}}" \
+  | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F10: Bash with no write target allows" "$?" "0"
+
+rm -rf "$F10_DIR"
+echo ""
+
 # --- e2e-extract.sh + cycle-e2e-pass.sh + scenarios.json schema (P6 / v0.2.0) ---
 echo "Section 11: Phase F (e2e)"
 
