@@ -398,11 +398,28 @@ function checkTestFileEditDuringGreen(filePath, forgeRoot) {
     ? filePath.slice(repoRoot.length + 1)
     : filePath;
 
+  // v0.3.x F4: best-of-N workers stage candidates under
+  // .forge/cycles/<n>/green/candidates/worker-<k>/files/<repo-relative-path>.
+  // A test-file edit at that staging path doesn't match the bare repo-relative
+  // path in tests.json, so we peel the prefix and compare the residue too.
+  // The coordinator's later rsync apply is invisible to forge-guard (Bash is
+  // not hooked), so blocking at worker write time is the only defense.
+  const candidateMatch = relPath.match(
+    /^\.forge\/cycles\/\d+\/green\/candidates\/worker-\d+\/files\/(.+)$/
+  );
+  const candidateResidue = candidateMatch ? candidateMatch[1] : null;
+
   // v0.3.x: schema split — the hook now reads `test_file` (path of the test
   // code), not `target_file` (path of the source under test). Anti-weakening
   // means we block edits to test files; sources are the implementer's job.
   const testFiles = new Set(tests.map((t) => t.test_file).filter(Boolean));
-  if (!testFiles.has(relPath) && !testFiles.has(filePath)) return null;
+  if (
+    !testFiles.has(relPath) &&
+    !testFiles.has(filePath) &&
+    !(candidateResidue && testFiles.has(candidateResidue))
+  ) {
+    return null;
+  }
 
   return [
     "[BLOCK] Forge Guard: test-file edit blocked during green phase",

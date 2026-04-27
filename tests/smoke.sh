@@ -348,6 +348,32 @@ assert "rule 7 skips outside green phase"     "$?" "0"
 rm -rf "$W7" "$W7B" "$W7C"
 echo ""
 
+# --- F4: worker candidate-prefix peel for test-file blocking ---
+echo "Section 10.5: F4 — candidate-staging prefix peel"
+F4_DIR=$(cd "$(mktemp -d)" && pwd -P)
+mkdir -p "${F4_DIR}/.forge/cycles/1/green/candidates/worker-3/files"
+cat > "${F4_DIR}/.forge/state.json" << 'JSON'
+{ "phase": "green", "current_cycle": 1, "iteration": 0 }
+JSON
+cat > "${F4_DIR}/.forge/cycles/1/tests.json" << 'JSON'
+[
+  {"id":"T-001","name":"x","behavior":"x","kind":"unit","target_file":"src/strip-ansi.ts","test_file":"test/strip-ansi.test.ts"}
+]
+JSON
+
+# Worker writing to a test_file path INSIDE its candidate dir → BLOCK
+echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${F4_DIR}/.forge/cycles/1/green/candidates/worker-3/files/test/strip-ansi.test.ts\"}}" \
+  | (cd "${F4_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F4: hook blocks worker test-file edit"  "$?" "2"
+
+# Worker writing to a target_file source path inside its candidate dir → ALLOW
+echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${F4_DIR}/.forge/cycles/1/green/candidates/worker-3/files/src/strip-ansi.ts\"}}" \
+  | (cd "${F4_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F4: hook allows worker source edit"     "$?" "0"
+
+rm -rf "$F4_DIR"
+echo ""
+
 # --- target_file/test_file schema split (F1 / v0.3.x) ---
 echo "Section 11.5: F1 — test_file hook block"
 # realpath the temp dir: on macOS mktemp returns /var/... but cwd resolves the
