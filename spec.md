@@ -266,12 +266,14 @@ project_domains:
   # - frontend     # not a hard-routing trigger by default — see below
 ```
 
-**Hard rule (forge-guard rule 6 extension):** when `project_domains` contains `sui-dapp`, **every** Task dispatch in the run — planner, codebase-explorer, test-author, implementer, every implementer-worker, every reviewer dimension, consolidator — uses `subagent_type = "sui-pilot:sui-pilot-agent"`. No exceptions for non-Move files. The forge-guard rule rejects Task calls whose `subagent_type` isn't `sui-pilot:sui-pilot-agent` while `sui-dapp` is in `project_domains`.
+**Hard rule (forge-guard rule 6 extension):** when `project_domains` contains `sui-dapp` (or `walrus`/`seal`/`sui-cli`), Task dispatches for **source-touching roles** — `implementer-worker` (writes code candidates) and `reviewer` (reads code with domain knowledge) — must use `subagent_type = "sui-pilot:sui-pilot-agent"`. **Orchestration roles are exempt**: `planner`, `test-author`, `implementer` (the coordinator), `consolidator`, and `codebase-explorer` keep their own tool surfaces. Sui-pilot's tools don't include `mcp__codex__codex` (planner needs it for G2.5), `Agent` (implementer-coordinator needs it to fan out 6 workers), and other role-specific affordances; forcing those roles onto sui-pilot would break orchestration. The per-glob `required_subagents` enforcement still applies on top — a planner editing a `.move` file would still need to route there.
+
+The forge-guard rule rejects Task calls whose `subagent_type` isn't `sui-pilot:sui-pilot-agent` when (a) a sui-ecosystem domain is set AND (b) the inferred role is in the source-touching set above.
 
 **Role behavior is delivered via prompt, not subagent_type.** The role-specific instructions in `agents/test-author.md`, `agents/implementer.md`, `agents/reviewer.md`, etc. become *role-prompt templates* the orchestrator embeds in the Task call's `prompt` parameter. The dispatched agent is sui-pilot; what it does this turn is shaped by the embedded role prompt.
 
 ```
-# Conceptually, every dispatch when project_domains contains sui-dapp:
+# Conceptually, source-touching dispatches when project_domains contains sui-dapp:
 Task(
   subagent_type: "sui-pilot:sui-pilot-agent",
   prompt: f"""

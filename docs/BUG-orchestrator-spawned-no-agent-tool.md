@@ -98,3 +98,186 @@ These aren't bugs in v0.2.0, just observations:
 Pick Option A or Option B and land it before the next CI run of `/forge-smoke`. The smoke test doesn't catch this (it tests the scripts, not the dispatch chain), so it's been silently broken since the orchestrator's halt-rule was added.
 
 — main session driving SEDEFI-176, 2026-04-27 16:17 UTC
+
+---
+
+# Amendment 1 — `project_domains` over-broad routing breaks orchestration roles
+
+**Filed:** 2026-04-27 19:25 UTC (during Phase 2 dispatch)
+**Severity:** Blocking when `agent-config.md` declares any `sui-*` project_domain.
+
+## What I observed
+
+After Phase 1 emitted `agent-config.md` with `project_domains: [sui-dapp]` (correct per the planner spec — the repo IS a Sui project), I tried to dispatch the forge-planner in Phase 2 cycle-plan mode. forge-guard rule 6 (`checkSpecialistRouting`) blocked the dispatch:
+
+> [BLOCK] Forge Guard: specialist routing violated (project_domains)
+> agent-config.md declares project_domains: ["sui-dapp"]
+> which forces every Task dispatch to use subagent_type="sui-pilot:sui-pilot-agent".
+> This Task call uses subagent_type="code-forge-v2:forge-planner".
+
+The hook is correctly enforcing the rule as written. **The rule itself is the bug.**
+
+## Why it's a bug
+
+`sui-pilot:sui-pilot-agent`'s tool surface is:
+```
+Glob, Grep, LS, Read, Edit, MultiEdit, Write, Bash,
+mcp__move-lsp__move_*
+```
+
+It does **not** have `mcp__codex__codex` / `mcp__codex__codex-reply` (forge planner needs both for G2.a, G2.b, G2.5, and per-cycle G5), nor `Agent` (forge implementer coordinator needs it for the 6-worker fan-out), nor any of the other domain-specific tools the orchestration roles depend on.
+
+Forcing sui-pilot for every Task dispatch means:
+- The forge-planner can't run G2.5 (no Codex).
+- The forge-implementer can't dispatch its 6 workers (no Agent).
+- The forge-test-author can't... actually it might still run, but it loses access to its own role-specific affordances.
+- The forge-consolidator and forge-reviewer might tolerate it, but they lose anything role-specific too.
+
+The rule conflates two distinct claims:
+
+| Claim | True for `[sui-dapp]`? |
+|---|---|
+| The codebase contains Move artifacts that must be edited by Move experts | **Yes.** Hard binding on `**/*.move` and `Move.toml` is correct. |
+| Every orchestration role (planner, test-author, implementer coordinator, consolidator, reviewer dimensions) must be a Move expert and run on sui-pilot's tool surface | **No.** Orchestration roles are role-specific, not domain-specific. |
+
+The first is exactly what `required_subagents` (with `applies_to`) is for — it already does this correctly per-glob. The second is the over-broad rule.
+
+## Where the rule lives
+
+`hooks/forge-guard.mjs:613-628` (or thereabouts):
+```js
+const domains = parseYamlList(fm, "project_domains");
+const SUI_DOMAINS = new Set(["sui-dapp", "walrus", "seal", "sui-cli"]);
+// ...
+if (domains.some(d => SUI_DOMAINS.has(d))) {
+  // → block any Task dispatch where subagent_type !== "sui-pilot:sui-pilot-agent"
+}
+```
+
+And in the planner spec (`agents/planner.md:185-189`):
+> "If `project_domains` is non-empty AND it includes `sui-dapp`, the per-glob `required_subagents` entries become subsumed (sui-pilot forced for everything). Keep them in the file as fallback for mixed/non-tagged projects."
+
+The "forced for everything" is the spec-level claim; forge-guard correctly implements it. The bug is at the spec level.
+
+## What the fix should do
+
+Three viable shapes:
+
+### Option A — make `project_domains` only force `implementer-worker` and `reviewer` roles
+
+These are the roles that actually edit / read source code. Planner, test-author, implementer-coordinator, consolidator, and the e2e reviewer (which drives Chrome MCP, not Move LSP) are orchestration / cross-cutting and should keep their own tool surface.
+
+In code:
+
+```js
+const ORCHESTRATION_ROLES = new Set([
+  "code-forge-v2:forge-planner",
+  "code-forge-v2:forge-test-author",
+  "code-forge-v2:forge-implementer",       // the coordinator, NOT the workers
+  "code-forge-v2:forge-consolidator",
+]);
+
+if (domains.some(d => SUI_DOMAINS.has(d))
+    && !ORCHESTRATION_ROLES.has(intendedSubagentType)) {
+  // block if subagent_type !== sui-pilot
+}
+```
+
+This is the cleanest fix and matches what `required_subagents.applies_to` is already doing for per-glob bindings.
+
+### Option B — `project_domains` becomes purely advisory; only `required_subagents` enforces
+
+Drop `project_domains` from the hook entirely. Use it only as a documentation / discovery signal. Hard routing comes solely from `required_subagents` with explicit `match` globs and `applies_to` lists.
+
+Pro: simplest. Con: the planner spec sells `project_domains` as an ergonomic shortcut for "this whole repo is a Sui project, don't make me write per-glob bindings for everything." Dropping it removes that ergonomics.
+
+### Option C — env-var bypass
+
+`FORGE_GUARD_SKIP_RULE6=1`. Cheap, but it's an "everything off" switch — easy to set and forget, and the rule's correct intent (Move artifacts must hit sui-pilot) is lost.
+
+**Recommend A.** It preserves `project_domains` as a useful shortcut but scopes the force to roles that actually touch source code.
+
+## My workaround for the SEDEFI-176 run
+
+Edited `agent-config.md` from `project_domains: [sui-dapp]` to `project_domains: []`. Kept the `required_subagents` entries (`**/*.move`, `**/Move.toml` → sui-pilot, applies_to planner+implementer-worker+reviewer). This:
+
+- Restores orchestration tool surfaces for the planner, test-author, implementer coordinator, and consolidator.
+- Preserves the Move-artifact hard binding via `required_subagents`.
+- Documented the workaround in the agent-config.md routing-decisions section.
+
+The cost: any *off-chain TS* work that would have benefited from sui-pilot's bundled SDK 2.0 migration docs now relies on sui-pilot being soft-surfaced via `recommended_agents` (which it is, first in the list). Reviewers will need discipline to consult sui-pilot before writing `@mysten/*` imports — the spec encodes this as a Cross-Cutting Invariant, but it's now a soft rule, not a hard one.
+
+## Suggested next step
+
+Land Option A in v0.3.0 (or sooner if you can). Until then, every `project_domains: [sui-dapp]` agent-config in the field is a tripwire that triggers on the first Task dispatch in Phase 2.
+
+— main session driving SEDEFI-176, 2026-04-27 19:25 UTC
+
+---
+
+# Amendment 2 — `state.json` schema has no "paused" or "blocked" status for failed decision gates
+
+**Filed:** 2026-04-27 19:50 UTC
+**Severity:** Workflow / minor.
+
+## What I observed
+
+Per the planner spec (and the SEDEFI-176 plan §10), failed decision gates (G-Boot, G-Schema, G-Pyth, G-Vault) instruct the orchestrator to "halt and escalate" rather than barrel through. In SEDEFI-176, G-Boot fails: the sandbox `pnpm deploy-all` errors at Phase 3 publishing the `token` Move package, and the indexer has no pools. I asked the user how to proceed; they chose "you repair sandbox; I wait."
+
+I needed to mark the run as paused so the next `/forge` invocation would clearly resume rather than start fresh. But the `state.json` schema (per `agents/forge-orchestrator.md` lines 130-143) has no `paused` field:
+
+```json
+{
+  "phase": "plan|spec-and-e2e|cycle-plan|cycle|contract|test-list|red|green|consolidated-review|phase-f|done",
+  "current_cycle": 1,
+  "total_cycles": 3,
+  "cycle_status": "in_progress|complete",
+  ...
+}
+```
+
+The closest match is `cycle_status` enum — but that's `in_progress | complete`, no `blocked` or `paused`.
+
+I worked around it by adding free-form fields (`paused: true`, `paused_at`, `paused_reason`) outside the documented schema. The schema validator (`scripts/cycle-validate.sh`) doesn't currently object to extra fields (presence-only check), so the workaround works. But there's no formal protocol for: orchestrator restart sees `paused: true`, prompts user before resuming, gives them a chance to abort.
+
+## Why it matters
+
+Decision gates are advertised as load-bearing in the spec ("halt and escalate"), but the state machine doesn't model what "halted-pending-user" looks like. Three failure modes that fall out:
+
+1. **Resume ambiguity.** When the user re-runs `/forge`, the orchestrator's resume logic should ideally say "you were paused at cycle-plan because G-Boot failed; want to retry G-Boot now or abort?" Without a schema slot, the resume path is "advance from cycle-plan to Cycle 1 contract" — which would silently retry G-Boot without context.
+
+2. **No "abort run" affordance.** A paused run becomes load-bearing on the user remembering to come back. If they want to formally cancel, there's no documented teardown.
+
+3. **forge-status.sh blind spot.** `scripts/forge-status.sh` reads `state.json` for the dashboard; without a paused state, it'd show "phase: cycle-plan" as if Phase 2 just finished and Cycle 1 was about to start, not "blocked on G-Boot since X."
+
+## Suggested fix
+
+Add to the `state.json` schema:
+
+```json
+{
+  ...
+  "paused": false,                    // boolean
+  "paused_at": null,                  // ISO-8601 or null
+  "paused_reason": null,              // free-text or null
+  "paused_at_gate": null              // "G-Boot" | "G-Schema" | "G-Pyth" | "G-Vault" | null
+}
+```
+
+And add to forge-orchestrator's resume path:
+
+```
+if state.paused:
+  ask user via AskUserQuestion: "Last run paused at <gate> because <reason>. Resume that gate? Abort? Restart from beginning?"
+  on Resume → re-run the failed gate
+  on Abort → state.phase = "done"; state.aborted = true
+  on Restart → wipe .forge/, fresh start
+```
+
+`forge-status.sh` should read these fields and render them prominently when present.
+
+## My workaround
+
+Added `paused`, `paused_at`, `paused_reason` to `.forge/state.json` for the SEDEFI-176 run as ad-hoc fields. Documented the resume protocol in TaskCreate so the user knows what to do when they come back. Not pretty, but functional.
+
+— main session driving SEDEFI-176, 2026-04-27 19:50 UTC

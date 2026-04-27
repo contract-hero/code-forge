@@ -615,27 +615,50 @@ function checkSpecialistRouting(toolInput, forgeRoot) {
 
   const subagentType = String(toolInput.subagent_type || "");
 
-  // Project-domain hard rule: any sui ecosystem domain forces sui-pilot for
-  // every Task dispatch. (Other compound domains may add to this list.)
+  // Project-domain rule: a sui-ecosystem domain forces sui-pilot ONLY for
+  // roles that actually edit or review source files. Orchestration roles
+  // (planner, test-author, implementer-coordinator, consolidator,
+  // codebase-explorer) need their own tool surfaces — sui-pilot lacks
+  // mcp__codex__codex (planner G2.5), Agent (implementer-coordinator's
+  // 6-worker fan-out), and other role-specific affordances. Forcing them
+  // would break the orchestration backbone. The domain force still applies
+  // to implementer-worker (writes code) and reviewer (reads code with
+  // domain knowledge); per-glob `required_subagents` continues to bind
+  // Move artifacts via its own enforcement path.
   const SUI_DOMAINS = new Set(["sui-dapp", "walrus", "seal", "sui-cli"]);
   const suiDomainPresent = domains.some((d) => SUI_DOMAINS.has(d));
+
+  // Roles that the project-domain rule applies to. Anchored on the role
+  // suffix (post-namespace) so it works with `code-forge-v2:forge-X` and
+  // any future namespacing.
+  const DOMAIN_FORCED_ROLES = new Set(["implementer-worker", "reviewer"]);
+
   if (suiDomainPresent) {
-    const expected = "sui-pilot:sui-pilot-agent";
-    if (subagentType !== expected) {
-      return [
-        "[BLOCK] Forge Guard: specialist routing violated (project_domains)",
-        "",
-        `agent-config.md declares project_domains: ${JSON.stringify(domains)}`,
-        `which forces every Task dispatch to use subagent_type="${expected}".`,
-        "",
-        `This Task call uses subagent_type="${subagentType || "<unset>"}".`,
-        "",
-        "Re-dispatch with the correct subagent_type. Role-specific behavior is",
-        "delivered by embedding the role prompt in the Task call's prompt",
-        "parameter (see spec §4.7.2). The subagent_type itself stays sui-pilot.",
-      ].join("\n");
+    const role = inferRoleFromTaskInput(toolInput);
+    if (role && DOMAIN_FORCED_ROLES.has(role)) {
+      const expected = "sui-pilot:sui-pilot-agent";
+      if (subagentType !== expected) {
+        return [
+          "[BLOCK] Forge Guard: specialist routing violated (project_domains)",
+          "",
+          `agent-config.md declares project_domains: ${JSON.stringify(domains)}`,
+          `which forces source-touching roles (implementer-worker, reviewer) to`,
+          `use subagent_type="${expected}".`,
+          "",
+          `This Task call: role="${role}", subagent_type="${subagentType || "<unset>"}".`,
+          "",
+          "Re-dispatch with the correct subagent_type. Role-specific behavior is",
+          "delivered by embedding the role prompt in the Task call's prompt",
+          "parameter (see spec §4.7.2). The subagent_type itself stays sui-pilot.",
+        ].join("\n");
+      }
+      return null;
     }
-    return null;
+    // Orchestration role (planner, test-author, implementer-coordinator,
+    // consolidator, codebase-explorer) — exempt from the domain force; falls
+    // through to the required_subagents glob check below for any per-file
+    // bindings (e.g. `**/*.move` → sui-pilot still applies when an orchestration
+    // role's dispatch target IS a Move file, which is rare but possible).
   }
 
   // No project_domain → fall back to required_subagents glob matches.

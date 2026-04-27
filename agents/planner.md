@@ -140,7 +140,10 @@ project_domains:
   # Detection: Move.toml or @mysten/sui in package.json → sui-dapp.
   #            walrus.toml or walrus_storage types → walrus.
   #            seal_id types or seal-specific deps → seal.
-  # When set, forge-guard rule 6 forces sui-pilot for ALL Task dispatches.
+  # When set, forge-guard rule 6 forces sui-pilot for SOURCE-TOUCHING role
+  # dispatches (implementer-worker, reviewer). Orchestration roles
+  # (planner, test-author, implementer-coordinator, consolidator,
+  # codebase-explorer) keep their own tool surfaces.
   - sui-dapp
 
 required_subagents:
@@ -191,7 +194,7 @@ recommended ordering. Cite the detection signals you saw in the repo.]
 - Reserved for correctness-grade specialists. Do NOT add quality-preference plugins like impeccable here — those go in `recommended_agents`.
 - Default Move bindings as shown above; add others only when the spec touches a domain whose specialist is correctness-grade.
 
-If `project_domains` is non-empty AND it includes `sui-dapp`, the per-glob `required_subagents` entries become subsumed (sui-pilot forced for everything). Keep them in the file as fallback for mixed/non-tagged projects.
+If `project_domains` is non-empty AND it includes a sui-ecosystem tag (`sui-dapp`, `walrus`, `seal`, `sui-cli`), forge-guard rule 6 forces `sui-pilot:sui-pilot-agent` for **source-touching role dispatches only** — `implementer-worker` (writes code candidates) and `reviewer` (reads code with domain knowledge). Orchestration roles (`planner`, `test-author`, `implementer` coordinator, `consolidator`, `codebase-explorer`) keep their own tool surfaces because sui-pilot lacks `mcp__codex__codex` (G2.5), `Agent` (worker fan-out), and other role-specific affordances. The per-glob `required_subagents` entries still apply on top of (and complement) the project-domain rule, so leave them in the file.
 
 ### 1f. Sealing
 

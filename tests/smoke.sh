@@ -291,15 +291,46 @@ GUARD_TEST_DIR=$(mktemp -d)
 mkdir -p "${GUARD_TEST_DIR}/.forge"
 cp "${FIXTURES}/cycle-good-sui/agent-config.md" "${GUARD_TEST_DIR}/.forge/agent-config.md"
 
-# project_domains: sui-dapp + general-purpose dispatch → BLOCK
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","prompt":"do work","description":"x"}}' \
-  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "project_domains mismatch blocks"     "$?" "2"
+# F7 (v0.3.x): project_domains forces sui-pilot only for source-touching roles.
+# Orchestration roles (planner, test-author, implementer-coordinator, consolidator,
+# codebase-explorer) keep their own tool surfaces — sui-pilot lacks Codex MCP /
+# Agent / etc. that those roles depend on.
 
-# project_domains: sui-dapp + sui-pilot dispatch → ALLOW
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"sui-pilot:sui-pilot-agent","prompt":"do work","description":"x"}}' \
+# Source-touching role mismatched → BLOCK
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-implementer-worker","prompt":"impl-worker on src/foo.move","description":"x"}}' \
   | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "project_domains match allows"        "$?" "0"
+# subagent_type doesn't match sui-pilot → blocks (because role IS implementer-worker, IS forced)
+# But wait — subagent_type IS code-forge-v2:forge-implementer-worker, not sui-pilot.
+# That's the violation. Expect exit 2.
+assert "F7: implementer-worker without sui-pilot blocks" "$?" "2"
+
+# Source-touching role with sui-pilot → ALLOW
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"sui-pilot:sui-pilot-agent","prompt":"as implementer-worker, edit src/foo.move","description":"x"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F7: implementer-worker with sui-pilot allows" "$?" "0"
+
+# Reviewer dispatch without sui-pilot → BLOCK
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-reviewer","prompt":"REVIEWER_DIMENSION=correctness; review src/foo.move","description":"reviewer"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+# reviewer mismatch → BLOCK by F7. (rule 3 also fires? No — no prior subagent-N.json files yet.)
+assert "F7: reviewer without sui-pilot blocks" "$?" "2"
+
+# F7 critical: orchestration roles ALLOWED through project_domains rule.
+# These need their own tool surfaces (Codex MCP, Agent), so sui-pilot would break them.
+# planner dispatch (orchestration) under project_domains: [sui-dapp] → ALLOW
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-planner","prompt":"draft contract.md for cycle 1","description":"planner contract"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F7: planner orchestration role allowed under sui-dapp" "$?" "0"
+
+# implementer-coordinator dispatch (orchestration) under project_domains: [sui-dapp] → ALLOW
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-implementer","prompt":"green-phase coordinator: dispatch 6 workers","description":"implementer coord"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F7: implementer coordinator allowed under sui-dapp" "$?" "0"
+
+# consolidator dispatch (orchestration) → ALLOW (matches F5 + F7 logic)
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-consolidator","prompt":"synthesize subagent-N.json into review.md","description":"consolidator"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F7: consolidator allowed under sui-dapp" "$?" "0"
 
 # Greenfield agent-config (empty project_domains, empty required) + arbitrary subagent → ALLOW
 cp "${FIXTURES}/cycle-good/agent-config.md" "${GUARD_TEST_DIR}/.forge/agent-config.md"
