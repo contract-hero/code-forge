@@ -546,6 +546,14 @@ fi
 rm -rf "$F11_DIR"
 echo ""
 
+# --- F8: forge-implementer is a procedure manual (mirrors F6's pattern) ---
+echo "Section 11.7: F8 — forge-implementer halt-stub"
+grep -q "procedure manual, not a dispatchable" "${PLUGIN_ROOT}/agents/implementer.md"
+assert "F8: implementer.md declares procedure-manual halt-stub" "$?" "0"
+grep -q "tools: Read, Bash" "${PLUGIN_ROOT}/agents/implementer.md"
+assert "F8: implementer.md tools narrowed to Read, Bash"        "$?" "0"
+echo ""
+
 # --- e2e-extract.sh + cycle-e2e-pass.sh + scenarios.json schema (P6 / v0.2.0) ---
 echo "Section 11: Phase F (e2e)"
 
