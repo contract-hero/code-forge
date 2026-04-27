@@ -152,6 +152,48 @@ echo "$OUT" | grep -q "Forge Status"
 assert "forge-status emits header"        "$?" "0"
 echo ""
 
+# --- agent-config.md schema (P3 / v0.2.0) ---
+echo "Section 8: agent-config.md schema"
+bash "${SCRIPTS}/cycle-validate.sh" "${FIXTURES}/cycle-good/agent-config.md" >/dev/null 2>&1
+assert "greenfield agent-config validates"   "$?" "0"
+
+bash "${SCRIPTS}/cycle-validate.sh" "${FIXTURES}/cycle-good-sui/agent-config.md" >/dev/null 2>&1
+assert "sui agent-config validates"          "$?" "0"
+
+# Missing frontmatter rejection — file basename must be exactly agent-config.md
+BAD_AC_DIR=$(mktemp -d)
+echo "no frontmatter here" > "${BAD_AC_DIR}/agent-config.md"
+bash "${SCRIPTS}/cycle-validate.sh" "${BAD_AC_DIR}/agent-config.md" >/dev/null 2>&1
+assert "missing-frontmatter agent-config rejects" "$?" "1"
+rm -rf "$BAD_AC_DIR"
+echo ""
+
+# --- forge-guard rule 6: specialist routing (P3 / v0.2.0) ---
+echo "Section 9: forge-guard rule 6 (specialist routing)"
+HOOK="${PLUGIN_ROOT}/hooks/forge-guard.mjs"
+GUARD_TEST_DIR=$(mktemp -d)
+mkdir -p "${GUARD_TEST_DIR}/.forge"
+cp "${FIXTURES}/cycle-good-sui/agent-config.md" "${GUARD_TEST_DIR}/.forge/agent-config.md"
+
+# project_domains: sui-dapp + general-purpose dispatch → BLOCK
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","prompt":"do work","description":"x"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "project_domains mismatch blocks"     "$?" "2"
+
+# project_domains: sui-dapp + sui-pilot dispatch → ALLOW
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"sui-pilot:sui-pilot-agent","prompt":"do work","description":"x"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "project_domains match allows"        "$?" "0"
+
+# Greenfield agent-config (empty project_domains, empty required) + arbitrary subagent → ALLOW
+cp "${FIXTURES}/cycle-good/agent-config.md" "${GUARD_TEST_DIR}/.forge/agent-config.md"
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","prompt":"do work","description":"x"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "greenfield routing skips"            "$?" "0"
+
+rm -rf "$GUARD_TEST_DIR"
+echo ""
+
 # --- Cleanup transient outputs ---
 rm -f "${FIXTURES}/cycle-good/_consolidated.json"
 rm -f "${FIXTURES}/cycle-bad-disputed/_consolidated.json"

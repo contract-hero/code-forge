@@ -85,6 +85,20 @@ function readYamlFrontmatter(filePath) {
   }
 }
 
+// Returns raw frontmatter text (between leading and closing --- lines), or
+// null if the file is missing or has no frontmatter. Used by parsers that
+// need block-style YAML, which the scalar-only readYamlFrontmatter() above
+// can't represent.
+function readYamlFrontmatterRaw(filePath) {
+  try {
+    const content = readFileSync(filePath, "utf8");
+    const match = content.match(/^---\n([\s\S]*?)\n---/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
 function readState(forgeRoot) {
   if (!forgeRoot) return null;
   // Prefer v2 state.json; fall back to v1 status.md
@@ -472,6 +486,195 @@ function checkParallelReviewerFanout(toolInput, forgeRoot) {
 }
 
 /**
+ * Rule 6 (v0.2.0 §8 rule 6): Specialist routing.
+ *
+ * When `agent-config.md` is present in the forge root, enforce two layers of
+ * routing on PreToolUse(Task):
+ *
+ *   - If `project_domains` contains "sui-dapp" (or any other compound domain
+ *     that maps to a specialist), every Task dispatch must use that
+ *     specialist's subagent_type. Hard-block mismatches.
+ *   - Otherwise, walk `required_subagents[*].match` globs against the
+ *     dispatch's likely target file (description/prompt heuristic) and
+ *     require the matching subagent_type when one is implied.
+ *
+ * Skips when no agent-config.md exists (greenfield, no specialist needed) or
+ * when the file's frontmatter is unparseable.
+ */
+function checkSpecialistRouting(toolInput, forgeRoot) {
+  if (!toolInput) return null;
+  if (!forgeRoot) {
+    const possibleForge = resolve(process.cwd(), ".forge");
+    if (!existsSync(possibleForge)) return null;
+    forgeRoot = possibleForge;
+  }
+  const cfgPath = resolve(forgeRoot, "agent-config.md");
+  if (!existsSync(cfgPath)) return null;
+
+  const fm = readYamlFrontmatterRaw(cfgPath);
+  if (!fm) return null;
+
+  const domains = parseYamlList(fm, "project_domains");
+  const required = parseRequiredSubagents(fm);
+
+  const subagentType = String(toolInput.subagent_type || "");
+
+  // Project-domain hard rule: any sui ecosystem domain forces sui-pilot for
+  // every Task dispatch. (Other compound domains may add to this list.)
+  const SUI_DOMAINS = new Set(["sui-dapp", "walrus", "seal", "sui-cli"]);
+  const suiDomainPresent = domains.some((d) => SUI_DOMAINS.has(d));
+  if (suiDomainPresent) {
+    const expected = "sui-pilot:sui-pilot-agent";
+    if (subagentType !== expected) {
+      return [
+        "[BLOCK] Forge Guard: specialist routing violated (project_domains)",
+        "",
+        `agent-config.md declares project_domains: ${JSON.stringify(domains)}`,
+        `which forces every Task dispatch to use subagent_type="${expected}".`,
+        "",
+        `This Task call uses subagent_type="${subagentType || "<unset>"}".`,
+        "",
+        "Re-dispatch with the correct subagent_type. Role-specific behavior is",
+        "delivered by embedding the role prompt in the Task call's prompt",
+        "parameter (see spec §4.7.2). The subagent_type itself stays sui-pilot.",
+      ].join("\n");
+    }
+    return null;
+  }
+
+  // No project_domain → fall back to required_subagents glob matches.
+  if (required.length === 0) return null;
+
+  const dispatchTarget = inferTargetFromTaskInput(toolInput);
+  if (!dispatchTarget) return null;
+
+  for (const entry of required) {
+    if (!entry.match || !entry.subagent_type) continue;
+    if (matchesGlob(entry.match, dispatchTarget)) {
+      if (subagentType !== entry.subagent_type) {
+        return [
+          "[BLOCK] Forge Guard: specialist routing violated (required_subagents)",
+          "",
+          `agent-config.md binds match="${entry.match}" → subagent_type="${entry.subagent_type}".`,
+          `Inferred dispatch target: "${dispatchTarget}".`,
+          "",
+          `This Task call uses subagent_type="${subagentType || "<unset>"}".`,
+          "",
+          "Re-dispatch with the bound subagent_type, or update agent-config.md if",
+          "the binding no longer reflects the intended routing.",
+        ].join("\n");
+      }
+      // First matching binding is authoritative.
+      return null;
+    }
+  }
+  return null;
+}
+
+// --- agent-config.md helpers (lightweight YAML for the schema we own) ---
+
+function parseYamlList(fm, key) {
+  // Match either `key: [a, b]` flow style or block style with `- ` items.
+  const inlineRe = new RegExp(`^${key}:\\s*\\[(.*?)\\]\\s*$`, "m");
+  const inline = inlineRe.exec(fm);
+  if (inline) {
+    return inline[1]
+      .split(",")
+      .map((s) => s.trim().replace(/^["']|["']$/g, ""))
+      .filter(Boolean);
+  }
+  const blockRe = new RegExp(`^${key}:\\s*$([\\s\\S]*?)(?=^[a-z_]+:|\\Z)`, "im");
+  const block = blockRe.exec(fm);
+  if (!block) return [];
+  return block[1]
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("- "))
+    .map((line) => line.slice(2).trim().replace(/^["']|["']$/g, ""))
+    .filter((s) => s && !s.startsWith("#"));
+}
+
+function parseRequiredSubagents(fm) {
+  // Walk a block-style YAML list of mappings. The schema is fixed enough
+  // that we don't need a full parser.
+  const out = [];
+  const lines = fm.split("\n");
+  let inSection = false;
+  let current = null;
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, "");
+    if (/^required_subagents:\s*$/.test(line)) {
+      inSection = true;
+      continue;
+    }
+    if (!inSection) continue;
+    // Section ends when a new top-level key appears (column 0, ends in ':').
+    if (/^[A-Za-z_][A-Za-z0-9_]*:/.test(line)) {
+      if (current) out.push(current);
+      break;
+    }
+    const startMatch = /^\s*-\s*match:\s*"?([^"#]+?)"?\s*(#.*)?$/.exec(line);
+    if (startMatch) {
+      if (current) out.push(current);
+      current = { match: startMatch[1].trim() };
+      continue;
+    }
+    const subAgentMatch = /^\s+subagent_type:\s*"?([^"#]+?)"?\s*(#.*)?$/.exec(line);
+    if (subAgentMatch && current) {
+      current.subagent_type = subAgentMatch[1].trim();
+      continue;
+    }
+    const appliesMatch = /^\s+applies_to:\s*\[(.*?)\]\s*(#.*)?$/.exec(line);
+    if (appliesMatch && current) {
+      current.applies_to = appliesMatch[1]
+        .split(",")
+        .map((s) => s.trim().replace(/^["']|["']$/g, ""))
+        .filter(Boolean);
+      continue;
+    }
+  }
+  if (inSection && current) out.push(current);
+  return out;
+}
+
+function inferTargetFromTaskInput(toolInput) {
+  // Best-effort: the Task tool doesn't expose a target_file directly; look
+  // at the prompt for path-shaped tokens.
+  const prompt = String(toolInput.prompt || "");
+  const desc = String(toolInput.description || "");
+  const haystack = `${prompt}\n${desc}`;
+  const pathRe = /(?:^|[\s'"`(])([\w./-]+(?:\.\w+|\.toml))(?=[\s'"`)]|$)/m;
+  const m = pathRe.exec(haystack);
+  return m ? m[1] : null;
+}
+
+function matchesGlob(pattern, target) {
+  // Tiny glob: supports `**/*.ext`, `*.ext`, `?`, and literals. Sufficient
+  // for the small fixed set of patterns in agent-config.md.
+  const escapeRe = (s) => s.replace(/[.+^$()|[\]\\]/g, "\\$&");
+  let re = "";
+  let i = 0;
+  while (i < pattern.length) {
+    const ch = pattern[i];
+    if (ch === "*" && pattern[i + 1] === "*") {
+      re += ".*";
+      i += 2;
+      if (pattern[i] === "/") i += 1;
+    } else if (ch === "*") {
+      re += "[^/]*";
+      i += 1;
+    } else if (ch === "?") {
+      re += "[^/]";
+      i += 1;
+    } else {
+      re += escapeRe(ch);
+      i += 1;
+    }
+  }
+  return new RegExp(`^${re}$`).test(target);
+}
+
+/**
  * Rule 7: Post-cycle freeze.
  * Once cycle N's _consolidated.json is sealed (cycle-pass.sh would return 0),
  * block edits to files listed in cycle N's contract.md until cycle N+1's
@@ -595,9 +798,11 @@ async function main() {
       violations.push(checkPostCycleFreeze(filePath, forgeRoot));
     }
 
-    // v2 rule 6 — parallel reviewer fan-out (Task tool dispatching subagent)
+    // v2 rule 3 — parallel reviewer fan-out (Task tool dispatching subagent)
+    // v0.2.0 rule 6 — specialist routing per agent-config.md
     if (toolName === "Task" || toolName === "Agent") {
       violations.push(checkParallelReviewerFanout(toolInput, forgeRoot));
+      violations.push(checkSpecialistRouting(toolInput, forgeRoot));
     }
 
     const real = violations.filter(Boolean);
