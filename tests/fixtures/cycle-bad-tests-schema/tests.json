@@ -1,0 +1,8 @@
+[
+  {
+    "id": "T-001",
+    "name": "missing kind field — should fail validation",
+    "behavior": "validator should reject this entry because the 'kind' field is missing",
+    "target_file": "src/x.ts"
+  }
+]

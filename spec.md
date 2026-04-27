@@ -47,7 +47,7 @@ v2 merges three lines of thinking that already exist in the user's plugin tree:
 
 - **`code-forge-rig`'s hook discipline** — phase ordering enforced as code.
 - **`move-pr-review`'s script coordination** — schema-validated parallel fan-out + clustering + coverage backfill.
-- **TDD as ground-truth signal** — the case made in `~/workspace/agentic-engineering-101/topics/05-tdd.md`. Tests turn agent narration into harness exit codes; with an LLM in the loop, that is the entire game.
+- **TDD as ground-truth signal** — see §4.2 and §13 for the case in this document. Tests turn agent narration into harness exit codes; with an LLM in the loop, that is the entire game.
 
 The intended outcome: a cycle the agent cannot fake its way through. Every phase has a verifiable artifact. Every advancement gate is enforced by a script or a hook. The orchestrator's job becomes thin: run the protocol, not interpret it.
 
@@ -97,17 +97,7 @@ The audit measures artifact *presence*, not authenticity. Off-axis evidence:
 
 Audit-tied + qualitative-favors-rig is the spec's "inconclusive → default to rig" branch, but more strongly: rig's `codex_thread_ids` evidence pushes this from "default" to "rig has the protocol-fidelity edge." The hooks are doing what they were built to do — preventing artifact-shape fakery — even when the audit dimension that would reward it (Codex Gate Compliance) was passed by both variants.
 
-**v2 forks `~/workspace/dotfiles/.claude/plugins/code-forge-rig/`** as the foundation. `forge-guard.mjs` carries forward and gets extended (§8). The original plugin remains frozen for fallback and three-way bench in Phase 5.
-
-### 3.4 Round-2 status
-
-The round-2 (extension) bench is **deferred per §11.1 option 3** ("skip round-2; round-1 + the move-pr-review study suffices"). Three reasons make this defensible:
-
-1. The decision rule needed "rig clearly/marginally better OR audit tie + qualitative favoring rig" to pick rig; round-1 delivered that unambiguously.
-2. The script-conflict on extension prompts (§11.1) means round-2 can't be run cleanly without modifying `forge-bench.sh` or running each variant manually — engineering cost not justified by the marginal data.
-3. Phase 5 of the implementation plan reruns the bench three-way (original / rig / v2) on the same prompts. That's where additional variance is collected — using v2 itself as a third data point is more informative than a second round-1.
-
-If Phase 5 reveals foundation regret, the original is one `cp -r` away.
+**v2 forks `~/.claude/plugins/code-forge-rig/`** as the foundation. `forge-guard.mjs` carries forward and gets extended (§8). The original plugins (`code-forge`, `code-forge-rig`) remain installed and frozen as fallback should v2 reveal foundation regret — `cp -r` is enough to revert.
 
 ---
 
@@ -136,9 +126,9 @@ Each new phase has:
 | Phase | Owner | Artifact | Forge-guard rule |
 |---|---|---|---|
 | `contract` | `planner` | `cycles/<n>/contract.md` | (existing rule: no implementation before contract) |
-| `test-list` | `test-author` | `cycles/<n>/tests.json` (schema: `name`, `behavior`, `kind`, `target_file`) | Block writes to `src/` until `tests.json` exists and validates. |
+| `test-list` | `test-author` | `cycles/<n>/tests.json` (schema: `name`, `behavior`, `kind`, `target_file`, `test_file`) | Block writes to `src/` until `tests.json` exists and validates. |
 | `red` | `test-author` | `cycles/<n>/red.log` (test runner stderr/exit code) | `PostToolUse(Bash)` after the test command checks exit ≠ 0. If 0, fail the phase — the test was tautological. |
-| `green` | `implementer` | `cycles/<n>/green.log` (test runner exit code = 0) | `PreToolUse(Edit)` on test files during this phase → block. (Anti-weakening rule, from 05-tdd.md.) |
+| `green` | `implementer` | `cycles/<n>/green.log` (test runner exit code = 0) | `PreToolUse(Edit)` on test files during this phase → block. (Anti-weakening rule; rationale in §13.) |
 | `consolidated-review` | `reviewer` × N + `consolidator` | `cycles/<n>/_consolidated.json` + `cycles/<n>/review.md` | Cycle pass requires no `critical` clusters and `disputed_severity=true` count = 0. |
 
 The TDD anti-patterns from the topic chapter (test-and-code in one turn, weakening assertions, post-hoc tests) become hook-enforced in green-phase, not skill-suggested.
@@ -205,7 +195,7 @@ green phase:
 
 **Pick-best, not merge.** Synthesis is *selection*, not *combining*. Fast, deterministic, debuggable. Frankenstein-merging multiple candidates risks code that no single agent produced and hides the diversity signal. If a future cycle needs merge mode, add a `--synthesize` flag; default stays pick-best.
 
-**Forge-guard rule 5 still applies to all 11 agents.** Coordinator and all workers are blocked from editing test files in green. Test files are read-only; only `target_file` paths from `tests.json` are eligible for write.
+**Forge-guard rule 5 still applies to all 11 agents.** Coordinator and all workers are blocked from editing test files in green. Files listed under `test_file` in `tests.json` are read-only; only `target_file` paths (the source under test) are eligible for write.
 
 **Diversity signal.** If all 6 workers converge on the same wrong implementation, that's information — flag it in `synthesis-notes.md` as "low diversity, likely shared blind spot." Counter (deferred to v0.3.x): re-dispatch with different prompt seeds or different model checkpoints.
 
@@ -276,12 +266,14 @@ project_domains:
   # - frontend     # not a hard-routing trigger by default — see below
 ```
 
-**Hard rule (forge-guard rule 6 extension):** when `project_domains` contains `sui-dapp`, **every** Task dispatch in the run — planner, codebase-explorer, test-author, implementer, every implementer-worker, every reviewer dimension, consolidator — uses `subagent_type = "sui-pilot:sui-pilot-agent"`. No exceptions for non-Move files. The forge-guard rule rejects Task calls whose `subagent_type` isn't `sui-pilot:sui-pilot-agent` while `sui-dapp` is in `project_domains`.
+**Hard rule (forge-guard rule 6 extension):** when `project_domains` contains `sui-dapp` (or `walrus`/`seal`/`sui-cli`), Task dispatches for **source-touching roles** — `implementer-worker` (writes code candidates) and `reviewer` (reads code with domain knowledge) — must use `subagent_type = "sui-pilot:sui-pilot-agent"`. **Orchestration roles are exempt**: `planner`, `test-author`, `implementer` (the coordinator), `consolidator`, and `codebase-explorer` keep their own tool surfaces. Sui-pilot's tools don't include `mcp__codex__codex` (planner needs it for G2.5), `Agent` (implementer-coordinator needs it to fan out 6 workers), and other role-specific affordances; forcing those roles onto sui-pilot would break orchestration. The per-glob `required_subagents` enforcement still applies on top — a planner editing a `.move` file would still need to route there.
+
+The forge-guard rule rejects Task calls whose `subagent_type` isn't `sui-pilot:sui-pilot-agent` when (a) a sui-ecosystem domain is set AND (b) the inferred role is in the source-touching set above.
 
 **Role behavior is delivered via prompt, not subagent_type.** The role-specific instructions in `agents/test-author.md`, `agents/implementer.md`, `agents/reviewer.md`, etc. become *role-prompt templates* the orchestrator embeds in the Task call's `prompt` parameter. The dispatched agent is sui-pilot; what it does this turn is shaped by the embedded role prompt.
 
 ```
-# Conceptually, every dispatch when project_domains contains sui-dapp:
+# Conceptually, source-touching dispatches when project_domains contains sui-dapp:
 Task(
   subagent_type: "sui-pilot:sui-pilot-agent",
   prompt: f"""
@@ -547,11 +539,17 @@ Same shape as move-pr-review's. No changes:
     "name": "counts zero lines for an empty directory",
     "behavior": "sloc(emptyDir) returns 0 with no warnings",
     "kind": "unit",                            // unit | integration | property
-    "target_file": "src/sloc.ts",
+    "target_file": "src/sloc.ts",              // source under test (coverage matrix)
+    "test_file": "tests/sloc.test.ts",         // path of the test code (forge-guard anti-weakening block)
     "covers_contract_requirement": "R1.2"      // refs contract.md anchor
   }
 ]
 ```
+
+**`target_file` vs `test_file`:**
+- `target_file` is the source file the test exercises. It feeds `cycle-coverage.sh`'s reviewer×file matrix and is informational metadata.
+- `test_file` is the path of the test code the test-author writes in the red phase. It feeds forge-guard's `checkTestFileEditDuringGreen` rule — during green phase, edits to any path listed in `test_file` are blocked, preventing the implementer from weakening tests to pass them.
+- Both are required. Multiple tests sharing one test file (the common case) repeat the `test_file` value; one test exercising multiple sources picks a primary `target_file` or splits into multiple entries.
 
 `tests.json` is reviewed and pruned by the orchestrator (or, optionally, by a Codex cross-check) before `red` phase begins.
 
@@ -640,7 +638,7 @@ The current rig hook (`code-forge-rig/hooks/forge-guard.mjs`, 348 lines) covers 
 
 New rules to add:
 
-1. **`PreToolUse(Edit)` test-file-during-green block** — match path against `tests.json` `target_file`s; reject if current phase is `green` and the editing agent isn't `test-author`.
+1. **`PreToolUse(Edit)` test-file-during-green block** — match path against `tests.json` `test_file`s (the test code paths); reject if current phase is `green` and the editing agent isn't `test-author`. The hook also peels the `cycles/<n>/green/candidates/worker-<k>/files/` prefix so worker-staged candidate writes are blocked at write time, before the coordinator's rsync apply.
 2. **`PostToolUse(Bash)` red-phase exit-code requirement** — when in `red` phase and command was the test runner, require exit code ≠ 0. If 0, mark phase failed and re-dispatch test-author with feedback "tests passed at red, are they tautological?"
 3. **`PreToolUse(Agent)` parallel-fan-out enforcement** — during `consolidated-review`, if a `reviewer` Agent call is dispatched more than 5 seconds after a previous `reviewer` Agent call has completed (rather than co-issued in the same turn), reject. Pushes orchestrator to dispatch all reviewers in one turn.
 4. **`PreToolUse(Edit)` post-cycle-pass freeze** — after a cycle's `_consolidated.json` is sealed (no critical, no disputed), block edits to files mentioned in that cycle's `contract.md` until next cycle's `contract` phase begins. Prevents implementer-after-review drift.
@@ -655,7 +653,7 @@ All advisory (non-blocking) rules from rig stay advisory. The blocking rules abo
 
 ## 9. Scripts to write
 
-Co-located with the v2 plugin: `~/workspace/dotfiles/.claude/plugins/code-forge-v2/scripts/`.
+Co-located with the v2 plugin tree at the repo root: `./scripts/` (deployed to `~/.claude/plugins/code-forge-v2/scripts/` via `bash scripts/deploy.sh`).
 
 | Script | Lines (estimate) | Notes |
 |---|---|---|
@@ -681,7 +679,7 @@ Co-located with the v2 plugin: `~/workspace/dotfiles/.claude/plugins/code-forge-
 
 ### 10.1 Foundation fork
 
-After bench (§3), create `~/workspace/dotfiles/.claude/plugins/code-forge-v2/` from chosen source. New `plugin.json` with name `code-forge-v2`, version `0.1.0`. Old plugins frozen for fallback and three-way bench.
+After bench (§3), create the `code-forge-v2` plugin tree (now at the repo root) from `~/.claude/plugins/code-forge-rig/` as starting point. New `plugin.json` with name `code-forge-v2`, version `0.1.0`. Old plugins (`code-forge`, `code-forge-rig`) stay installed and frozen as fallback.
 
 ### 10.2 Agent prompt port
 
@@ -755,16 +753,6 @@ forge-bench works because it sidesteps the Agent tool entirely and uses `bash` +
 
 **Why not now.** v2 has enough moving parts already. Layering a session-boundary architectural change on top of TDD-as-phase, script coordination, hook discipline, and a bench-driven foundation pick risks coupling several axes of failure. Ship the boring version first, instrument it, measure the failure modes, then introduce fresh sessions where they earn their keep.
 
-### 11.1 Round-2 (extension) bench
-
-The forge-bench script `auto-suffixes` if `forge/`/`forge-rig/` exist in cwd, defeating pre-staging of an extension target repo. Three resolutions, none chosen yet:
-
-1. Run round-2 as a second greenfield of distinct shape (different domain, different language).
-2. Bench round-2 manually outside the script (clone twice, invoke each plugin once, diff by hand).
-3. Skip round-2 — round-1 + the move-pr-review study suffices for foundation pick.
-
-Decision deferred until round-1 results are in. If round-1 verdict is unambiguous, option 3 is acceptable.
-
 ### 11.2 REVIEWERS default
 
 Set to 6 above (one per dimension). Defensible but not validated. The first three real cycles on v2 should record `agreement_count` distributions; if most clusters have agreement = 1 (no overlap between dimensions), 6 is too few. If most have agreement ≥ 4 (every reviewer flagging same things), 6 is too many. Tune to keep median agreement in [2, 3].
@@ -790,21 +778,6 @@ Either way: v2 fixes this by *making the verdict a structured artifact*, not fre
 
 This is a small but real example of why v2's "gates as code, not prose" principle (§4.5) matters. The bench surfaced it; the v2 design absorbs it for free.
 
-### 11.7 Three-way bench in Phase 5 — acceptance bar
-
-Plan calls for original / rig / v2 head-to-head with same Phase 0 prompts.
-
-**Acceptance bar (resolved):** *v2 must not regress against rig on the forge-audit dimensions; structural wins count even at audit-tie.*
-
-Concretely: v2 ships if all of the following hold:
-- Overall audit score ≥ rig's score on the same prompt.
-- All v2-specific artifacts (`tests.json`, `red.log`, `green.log`, `_consolidated.json`, `_coverage_matrix.txt`, `review.md`) are present and schema-valid.
-- No new audit dimensions regress below rig's score.
-
-This is the pragmatic bar. The audit doesn't reward consolidated multi-dimensional review or TDD-as-phase enforcement — those are real wins the audit can't see. Requiring v2 to *beat* rig on metrics that don't measure its improvements would be the wrong incentive.
-
-If v2 ties on audit AND the new artifacts are clean, ship. Phase 6 (post-ship) can then design audit dimensions that *do* measure the new wins (e.g. "consolidated_review_present", "tdd_red_phase_evidence"), and re-bench under the richer rubric.
-
 ---
 
 ## 12. Reference table — load-bearing source files
@@ -813,14 +786,13 @@ Read these (do not skim) before implementing the corresponding section:
 
 | For section | Read file | Why |
 |---|---|---|
-| §4.1 (orchestrator) | `~/workspace/dotfiles/.claude/plugins/code-forge/agents/cycle-orchestrator.md` and the other 3 orchestrators | The compression target. |
-| §4.2 (TDD as phase) | `~/workspace/agentic-engineering-101/topics/05-tdd.md` | The rationale for hook-enforced anti-patterns. |
+| §4.1 (orchestrator) | `~/.claude/plugins/code-forge/agents/cycle-orchestrator.md` and the other 3 orchestrators | The compression target. |
+| §4.2 (TDD as phase) | §13 of this document | The rationale for hook-enforced anti-patterns lives here. |
 | §4.3 (script coordination) | `~/.claude/sui-pilot/skills/move-pr-review/SKILL.md` | Full pattern, including failure modes section. |
 | §4.3 (script implementation) | `~/.claude/sui-pilot/skills/move-pr-review/scripts/{validate_schema.sh,consolidate.js,coverage_matrix.sh}` | Direct port targets. |
 | §4.4 (coverage backfill) | `~/.claude/sui-pilot/skills/move-pr-review/scripts/coverage_matrix.sh` and SKILL.md "Phase 2" | The leader backfill mechanism. |
-| §8 (hooks) | `~/workspace/dotfiles/.claude/plugins/code-forge-rig/hooks/forge-guard.mjs` | Existing rules; new rules extend, don't replace. |
-| §10 (migration) | `~/workspace/dotfiles/.claude/plugins/code-forge/agents/*.md` (all 8) | Source prompts to port. |
-| Bench acceptance | `~/workspace/dotfiles/.claude/plugins/forge-bench/scripts/forge-audit.mjs` | The 7 audit dimensions v2 must improve on. |
+| §8 (hooks) | `~/.claude/plugins/code-forge-rig/hooks/forge-guard.mjs` | Original rules; v0.1.0 carried forward and extended. |
+| §10 (migration) | `~/.claude/plugins/code-forge/agents/*.md` (all 8) | Source prompts to port. |
 
 ---
 
@@ -838,7 +810,7 @@ Read these (do not skim) before implementing the corresponding section:
 
 - **Subagent collusion on same blind spot.** All 6 reviewers run from the same model with the same context; they share blind spots. Counter: leader backfill (R0) on low-coverage files; orchestrator's private smoke-read of the cycle deliverable. Stronger counter (deferred to a future v2.x): fresh CLI session reading the cycle artifacts cold — see §11.0 for the architectural framing.
 - **Mega-clustering.** Multiple distinct concerns at the same line range merge into one cluster. The consolidator must split by re-deriving threat paths. Heuristic: if a cluster has ≥3 distinct categories and `agreement_count ≥ 3`, it's a mega-cluster — split.
-- **Tautological tests in red phase.** Test "fails" on import error or syntax problem rather than the behavior under test. Counter: forge-guard's red-phase rule requires not just exit code ≠ 0 but a structured failure that mentions the test's behavior. (Phase 5 hook tuning.)
+- **Tautological tests in red phase.** Test "fails" on import error or syntax problem rather than the behavior under test. Counter: forge-guard's red-phase rule requires not just exit code ≠ 0 but a structured failure that mentions the test's behavior. (Future hook tuning.)
 - **Implementer drift toward weakening tests.** Easiest path to green is changing the test, not the code. Counter: test-file edit block during green (§8 rule 1).
 - **Serial reviewer dispatch.** Defeats parallelism *and* independence. Counter: §8 rule 3, with the timestamp heuristic.
 - **Stale skill-file in agent context.** Agents read SKILL.md once at session start, then drift over long cycles. Counter: scripts implement the gates, not the skill file. The skill file becomes documentation, not protocol.
@@ -846,17 +818,16 @@ Read these (do not skim) before implementing the corresponding section:
 
 ---
 
-## 14. Validation plan (Phase 5 in the implementation plan)
+## 14. Validation plan
 
-1. `cd ~/workspace/dotfiles/.claude/plugins/code-forge-v2 && bash tests/smoke.sh` → 0.
-2. `/forge-bench "<round-1 prompt>" --label v2-vs-rig-round-1` against the Phase 0 round-1 prompt → forge-compare verdict ≥ "marginally better" than chosen foundation.
-3. End-to-end: run `/forge` on `add a TypeScript helper that …` (small fresh task). Observe in `.forge/`:
-   - Phases land in order: `contract → test-list → red → green → consolidated-review`.
+1. `bash tests/smoke.sh` from the repo root → 0.
+2. End-to-end: run `/forge` on `add a TypeScript helper that …` (small fresh task) against a deployed copy (`bash scripts/deploy.sh && /forge ...`). Observe in `.forge/`:
+   - Phases land in order: `contract → test-list → red → green → consolidated-review` (and Phase F if the spec contains `## E2E Tests`).
    - Forge-guard blocks an attempted test-file edit during green (smoke-tested by deliberate prompt to weaken a test).
-   - `consolidated-review` produces 5 reviewer JSONs + a `_consolidated.json` clustered artifact.
-4. Codex cross-check on the resulting SKILL.md and a sample cycle's `.forge/` artifact bundle.
+   - `consolidated-review` produces 6 reviewer JSONs (5 dimensions + R0 if coverage flagged) + a `_consolidated.json` clustered artifact.
+3. Codex cross-check on the resulting SKILL.md, a sample cycle's `.forge/` artifact bundle, and the new/extended hook rules in `forge-guard.mjs`.
 
-Acceptance: all four pass without manual intervention.
+Acceptance: all three pass without manual intervention. Capture the run in `docs/v0.2.0-build-report.md`.
 
 ---
 

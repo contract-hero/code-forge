@@ -2,7 +2,7 @@
 
 A multi-agent build system that turns lazy prompts into shippable software through structured planning, TDD-as-phase, parallel review, and hook-enforced protocol discipline.
 
-> Status: **v0.1.0 implemented and shipped** (lives in [dotclaude/.claude/plugins/code-forge-v2/](https://github.com/alilloig/dotclaude/tree/main/plugins/code-forge-v2)). **v0.2.0 designed** in this repo, not yet implemented.
+> Status: **v0.2.0 in development in this repo.** v0.1.0 baseline ported from `~/.claude/plugins/code-forge-v2/`; smoke 19/19 green. Run `bash scripts/deploy.sh` to push changes to the live install. See [`docs/implementation-summary.md`](./docs/implementation-summary.md) for v0.1.0 build report and [`spec.md`](./spec.md) §0 for v0.2.0 amendments.
 
 ## Start here: open the playground
 
@@ -30,8 +30,8 @@ If you spend 5 minutes there, you'll understand more than any README could tell 
 
 | Phase | Status | Lives at |
 |---|---|---|
-| v0.1.0 (TDD-as-phase, parallel review, gates as code, smoke tests) | **shipped, smoke 19/19 green** | [dotclaude/plugins/code-forge-v2/](https://github.com/alilloig/dotclaude/tree/main/plugins/code-forge-v2) |
-| v0.2.0 (claudex Phase 0, e2e-as-glue, best-of-N implementer, project-domain routing) | **design only** | this repo, [`spec.md`](./spec.md) §0 + §4.6–4.10 |
+| v0.1.0 (TDD-as-phase, parallel review, gates as code, smoke tests) | **shipped, smoke 19/19 green** | this repo (plugin tree at root); deploys to `~/.claude/plugins/code-forge-v2/` |
+| v0.2.0 (claudex Phase 0, e2e-as-glue, best-of-N implementer, project-domain routing) | **in progress** | this repo, see [`spec.md`](./spec.md) §0 + §4.6–4.10 |
 
 See [`docs/implementation-summary.md`](./docs/implementation-summary.md) for what was actually built in v0.1.0 and how it was verified.
 
@@ -47,11 +47,23 @@ The v0.2.0 design adds e2e tests as the cross-cycle invariant (Phase F, post-cyc
 
 ## Layout
 
+This repo is **both** the design home and the plugin source. The plugin tree lives at the repo root:
+
 ```
 .
 ├── README.md                          # this file
-├── spec.md                            # v0.2.0 design spec (~880 lines)
+├── PLUGIN.md                          # plugin user docs (commands, agents, schemas)
+├── spec.md                            # v0.2.0 design spec
 ├── playground.html                    # interactive architecture explorer
+│
+├── .claude-plugin/plugin.json         # plugin manifest
+├── agents/                            # forge-orchestrator, planner, implementer(+worker), test-author, reviewer, consolidator, codebase-explorer
+├── commands/                          # /forge, /forge-smoke
+├── hooks/                             # forge-guard.mjs (8 rules)
+├── scripts/                           # cycle-* gates + deploy.sh + e2e-extract.sh
+├── skills/code-forge/SKILL.md         # protocol overview
+├── tests/                             # smoke.sh + fixtures
+│
 ├── docs/
 │   ├── implementation-summary.md      # v0.1.0 build report
 │   ├── agent-routing.md               # agent dispatch rules + user preferences
@@ -60,7 +72,16 @@ The v0.2.0 design adds e2e tests as the cross-cycle invariant (Phase F, post-cyc
     └── round-1-greenfield/            # forge-bench round-1 results that drove the v2 foundation pick
 ```
 
+## Deploy to live install
+
+The plugin source lives here; Claude Code loads from `~/.claude/plugins/code-forge-v2/`. Sync after changes:
+
+```bash
+bash scripts/deploy.sh             # rsync repo → install
+bash scripts/deploy.sh --dry-run   # show what would change
+bash scripts/deploy.sh --check     # exit 0 if in sync
+```
+
 ## Related repos
 
-- [`dotclaude`](https://github.com/alilloig/dotclaude) — Claude Code plugins including the actual `code-forge-v2` v0.1.0 implementation.
 - [`sui-pilot`](https://github.com/alilloig/sui-pilot) — the source of the script-coordinated parallel-review pattern (`move-pr-review` skill).

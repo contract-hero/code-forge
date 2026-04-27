@@ -1,0 +1,38 @@
+[
+  {
+    "cluster_id": "C001",
+    "title": "E-001 sign-in flow validated",
+    "file": "e2e/scenarios/E-001.md",
+    "line_ranges": ["1-10"],
+    "agreement_count": 1,
+    "reviewers": [1],
+    "max_severity": "info",
+    "min_severity": "info",
+    "disputed_severity": false,
+    "categories": ["e2e-flow"],
+    "recommendations": ["None — scenario passes."],
+    "descriptions": ["Scenario E-001 walks through sign-in and dashboard render successfully."],
+    "impacts": ["User flow works end-to-end."],
+    "evidence": "E-001 ran without console errors",
+    "confidence_spread": ["high"],
+    "source_ids": ["R1-001"]
+  },
+  {
+    "cluster_id": "C002",
+    "title": "E-002 cli help output validated",
+    "file": "src/cli.ts",
+    "line_ranges": ["1-30"],
+    "agreement_count": 1,
+    "reviewers": [2],
+    "max_severity": "info",
+    "min_severity": "info",
+    "disputed_severity": false,
+    "categories": ["e2e-flow"],
+    "recommendations": ["None — scenario passes."],
+    "descriptions": ["E-002: 'myapp --help' renders 'Usage:' and exits 0."],
+    "impacts": ["CLI surface discoverable."],
+    "evidence": "stdout matched expected pattern",
+    "confidence_spread": ["high"],
+    "source_ids": ["R2-001"]
+  }
+]

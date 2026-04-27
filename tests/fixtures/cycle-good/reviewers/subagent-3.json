@@ -1,0 +1,15 @@
+[
+  {
+    "id": "R3-001",
+    "title": "no logging when readdir fails",
+    "severity": "medium",
+    "category": "error-handling",
+    "file": "src/sloc.ts",
+    "line_range": "60-68",
+    "description": "When readdir throws, the catch block returns null without surfacing the failure. The CLI exits 0 even when half the input set failed to read.",
+    "impact": "Silent data loss for unreadable directories. User sees a count that's too low without warning.",
+    "recommendation": "Log a warning and increment a failure counter; surface in the final summary.",
+    "evidence": ".catch(() => null)",
+    "confidence": "high"
+  }
+]

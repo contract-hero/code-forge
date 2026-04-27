@@ -1,0 +1,26 @@
+[
+  {
+    "id": "T-001",
+    "name": "passthrough on plain text",
+    "behavior": "stripAnsi('hello') returns 'hello'",
+    "kind": "unit",
+    "target_file": "src/strip-ansi.ts",
+    "test_file": "test/strip-ansi.test.ts"
+  },
+  {
+    "id": "T-002",
+    "name": "strips a basic color sequence",
+    "behavior": "stripAnsi('\\x1b[31mred\\x1b[0m') returns 'red'",
+    "kind": "unit",
+    "target_file": "src/strip-ansi.ts",
+    "test_file": "test/strip-ansi.test.ts"
+  },
+  {
+    "id": "T-003",
+    "name": "empty input returns empty",
+    "behavior": "stripAnsi('') returns ''",
+    "kind": "unit",
+    "target_file": "src/strip-ansi.ts",
+    "test_file": "test/strip-ansi.test.ts"
+  }
+]

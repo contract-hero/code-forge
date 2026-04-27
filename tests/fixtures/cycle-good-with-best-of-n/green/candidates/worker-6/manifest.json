@@ -1,0 +1,1 @@
+{ "worker": 6, "target_files": ["src/strip-ansi.ts"], "lines_changed": 3, "complexity_proxy": 1, "blocked": false, "tests_pass": false, "failure_summary": "T-002: expected 'red', got 'red\\x1b[0m'" }

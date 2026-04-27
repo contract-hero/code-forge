@@ -1,0 +1,28 @@
+[
+  {
+    "id": "R1-001",
+    "title": "format.ts json flag inverted",
+    "severity": "high",
+    "category": "correctness",
+    "file": "src/format.ts",
+    "line_range": "12-18",
+    "description": "The if-branch in format() outputs text when json=true and JSON when json=false — the conditional is inverted relative to the contract acceptance criterion.",
+    "impact": "--json flag emits human-readable text; default emits JSON. Breaks both branches of the contract.",
+    "recommendation": "Swap the branches or invert the conditional.",
+    "evidence": "if (opts.json) return formatText(counts);",
+    "confidence": "high"
+  },
+  {
+    "id": "R1-002",
+    "title": "no early return for empty input",
+    "severity": "low",
+    "category": "simplicity",
+    "file": "src/sloc.ts",
+    "line_range": "44-52",
+    "description": "Function walks the entire empty tree before returning 0; an early return would simplify and improve perf marginally.",
+    "impact": "Minor; only affects empty-dir case which is a fast path anyway.",
+    "recommendation": "Add an early return when readdir yields zero entries.",
+    "evidence": "for (const entry of entries) { ... }",
+    "confidence": "medium"
+  }
+]

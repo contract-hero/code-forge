@@ -1,0 +1,2 @@
+src/strip-ansi.ts
+src/index.ts
