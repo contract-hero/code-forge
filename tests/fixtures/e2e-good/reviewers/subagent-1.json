@@ -1,0 +1,15 @@
+[
+  {
+    "id": "R1-001",
+    "title": "E-001 sign-in path renders dashboard cleanly",
+    "severity": "info",
+    "category": "e2e-flow",
+    "file": "e2e/scenarios/E-001.md",
+    "line_range": "1-10",
+    "description": "Scenario E-001 walks through sign-in and dashboard render via Chrome DevTools MCP without console errors.",
+    "impact": "User flow works end-to-end as specified.",
+    "recommendation": "None — scenario passes.",
+    "evidence": "scenario E-001 navigated /sign-in → /dashboard; final DOM contained 'Counter: 0'",
+    "confidence": "high"
+  }
+]

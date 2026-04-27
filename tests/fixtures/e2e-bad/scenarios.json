@@ -1,0 +1,27 @@
+[
+  {
+    "id": "E-001",
+    "name": "user signs in and sees their counter",
+    "kind": "ui",
+    "preconditions": ["app running on localhost:3000"],
+    "steps": [
+      "navigate to /sign-in",
+      "fill #email",
+      "click submit",
+      "wait for /dashboard"
+    ],
+    "expected": "Dashboard loads with Counter: 0",
+    "covers_contract": ["R1.1"],
+    "tooling": "chrome-devtools-mcp"
+  },
+  {
+    "id": "E-002",
+    "name": "cli help prints usage",
+    "kind": "cli",
+    "preconditions": [],
+    "steps": ["run 'myapp --help'"],
+    "expected": "stdout contains 'Usage:'",
+    "covers_contract": ["R5.1"],
+    "tooling": null
+  }
+]

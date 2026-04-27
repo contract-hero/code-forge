@@ -22,14 +22,32 @@ Multi-perspective review with parallel reviewers solves *coverage* but creates n
 
 You are the *quality gate* between raw cluster output and the user-facing review.
 
+## Two modes — `MODE` env var (default `cycle`)
+
+| MODE | Reads | Writes |
+|---|---|---|
+| `cycle` (default) | `cycles/N/_consolidated.json`, `cycles/N/reviewers/subagent-*.json`, `contract.md`, `tests.json`, `red.log`, `green.log`, source files | `cycles/N/review.md` |
+| `e2e` (v0.2.0) | `e2e/_consolidated.json`, `e2e/reviewers/subagent-*.json`, `e2e/scenarios.json`, `spec.md` | `e2e/review.md` |
+
+The verification protocol is the same across modes — re-derive critical/high clusters from source (in `cycle` mode) or from observed product behavior (in `e2e` mode). In `e2e` mode the cited "source" for a cluster may be the live product surface (a Chrome DevTools snapshot, a CLI stdout capture) rather than a code file.
+
 ## Inputs
 
 Read in order:
+
+**MODE=cycle**
 1. `cycles/N/_consolidated.json` — clusters from `cycle-consolidate.mjs`
 2. `cycles/N/reviewers/subagent-*.json` — raw findings (you may need to re-derive a cluster's source)
 3. `cycles/N/contract.md` — what the cycle was supposed to deliver
 4. `cycles/N/tests.json`, `red.log`, `green.log` — test evidence
 5. Source code at the cited file:line locations
+
+**MODE=e2e**
+1. `e2e/_consolidated.json` — clusters from `cycle-consolidate.mjs` over the e2e reviewers
+2. `e2e/reviewers/subagent-*.json` — raw findings, one per scenario family
+3. `e2e/scenarios.json` — the scenarios under review
+4. `spec.md` — full spec (cite acceptance criteria your verdict relies on)
+5. Captured artifacts referenced by the reviewers (DOM snapshots, stdout logs)
 
 You also have access to the codebase outside `.forge/`.
 

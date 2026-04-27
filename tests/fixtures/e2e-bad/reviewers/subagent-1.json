@@ -1,0 +1,15 @@
+[
+  {
+    "id": "R1-001",
+    "title": "E-001 sign-in submit triggers 500",
+    "severity": "critical",
+    "category": "e2e-flow",
+    "file": "src/auth/handler.ts",
+    "line_range": "44-72",
+    "description": "Clicking submit during scenario E-001 returns HTTP 500; user never reaches /dashboard.",
+    "impact": "Users cannot sign in; product is unusable on the documented path.",
+    "recommendation": "Fix the auth handler or make sign-in the first remediation cycle's contract.",
+    "evidence": "console: 'POST /api/sign-in 500'; final URL stayed at /sign-in",
+    "confidence": "high"
+  }
+]

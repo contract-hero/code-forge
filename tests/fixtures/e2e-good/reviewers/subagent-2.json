@@ -1,0 +1,15 @@
+[
+  {
+    "id": "R2-001",
+    "title": "E-002 cli help output matches expected pattern",
+    "severity": "info",
+    "category": "e2e-flow",
+    "file": "src/cli.ts",
+    "line_range": "1-30",
+    "description": "Scenario E-002 ran 'myapp --help' against the built CLI; stdout includes the 'Usage:' header and exits 0.",
+    "impact": "CLI surface is discoverable; help renders correctly.",
+    "recommendation": "None — scenario passes.",
+    "evidence": "stdout: 'Usage: myapp [options]\\n  ...'",
+    "confidence": "high"
+  }
+]

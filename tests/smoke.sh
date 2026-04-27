@@ -315,6 +315,42 @@ assert "rule 7 skips outside green phase"     "$?" "0"
 rm -rf "$W7" "$W7B" "$W7C"
 echo ""
 
+# --- e2e-extract.sh + cycle-e2e-pass.sh + scenarios.json schema (P6 / v0.2.0) ---
+echo "Section 11: Phase F (e2e)"
+
+# e2e-extract.sh roundtrip — parse spec.md ## E2E Tests, validate output
+E2E_OUT=$(mktemp -d)
+bash "${SCRIPTS}/e2e-extract.sh" "${FIXTURES}/e2e-spec-source/spec.md" "${E2E_OUT}/scenarios.json" >/dev/null 2>&1
+assert "e2e-extract.sh runs"                 "$?" "0"
+[[ -f "${E2E_OUT}/scenarios.json" ]]
+assert "e2e-extract emitted scenarios.json"  "$?" "0"
+extracted_count=$(jq 'length' "${E2E_OUT}/scenarios.json" 2>/dev/null || echo "?")
+[[ "$extracted_count" == "2" ]]
+assert "e2e-extract found 2 scenarios"       "$?" "0"
+bash "${SCRIPTS}/cycle-validate.sh" "${E2E_OUT}/scenarios.json" >/dev/null 2>&1
+assert "extracted scenarios.json validates"  "$?" "0"
+rm -rf "$E2E_OUT"
+
+# scenarios.json schema — fixture-based
+bash "${SCRIPTS}/cycle-validate.sh" "${FIXTURES}/e2e-good/scenarios.json" >/dev/null 2>&1
+assert "e2e-good scenarios.json validates"   "$?" "0"
+
+# Malformed scenarios.json (missing required fields) → reject
+BAD_SCEN=$(mktemp -d)
+echo '[{"id":"E-001","name":"x"}]' > "${BAD_SCEN}/scenarios.json"
+bash "${SCRIPTS}/cycle-validate.sh" "${BAD_SCEN}/scenarios.json" >/dev/null 2>&1
+assert "malformed scenarios.json rejects"    "$?" "1"
+rm -rf "$BAD_SCEN"
+
+# cycle-e2e-pass.sh — passing fixture
+bash "${SCRIPTS}/cycle-e2e-pass.sh" "${FIXTURES}/e2e-good" >/dev/null 2>&1
+assert "e2e-good fixture passes ship gate"   "$?" "0"
+
+# cycle-e2e-pass.sh — failing fixture (critical cluster + uncovered scenario)
+bash "${SCRIPTS}/cycle-e2e-pass.sh" "${FIXTURES}/e2e-bad" >/dev/null 2>&1
+assert "e2e-bad fixture fails ship gate"     "$?" "1"
+echo ""
+
 # --- Cleanup transient outputs ---
 rm -f "${FIXTURES}/cycle-good/_consolidated.json"
 rm -f "${FIXTURES}/cycle-bad-disputed/_consolidated.json"
