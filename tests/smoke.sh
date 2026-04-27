@@ -406,6 +406,19 @@ rm -rf "$E2E_OUT"
 bash "${SCRIPTS}/cycle-validate.sh" "${FIXTURES}/e2e-good/scenarios.json" >/dev/null 2>&1
 assert "e2e-good scenarios.json validates"   "$?" "0"
 
+# F3: e2e-extract round-trips a planner-shaped spec (more realistic than the
+# minimal e2e-spec-source fixture — has full prose sections plus the canonical
+# fenced-YAML block the planner is told to copy verbatim).
+PSHAPE_OUT=$(mktemp -d)
+bash "${SCRIPTS}/e2e-extract.sh" "${FIXTURES}/e2e-spec-source-planner-shape/spec.md" "${PSHAPE_OUT}/scenarios.json" >/dev/null 2>&1
+assert "F3: planner-shape extracts cleanly"  "$?" "0"
+bash "${SCRIPTS}/cycle-validate.sh" "${PSHAPE_OUT}/scenarios.json" >/dev/null 2>&1
+assert "F3: planner-shape scenarios validate" "$?" "0"
+pshape_count=$(jq 'length' "${PSHAPE_OUT}/scenarios.json" 2>/dev/null || echo "?")
+[[ "$pshape_count" == "3" ]]
+assert "F3: planner-shape extracted 3 scenarios" "$?" "0"
+rm -rf "${PSHAPE_OUT}"
+
 # Malformed scenarios.json (missing required fields) → reject
 BAD_SCEN=$(mktemp -d)
 echo '[{"id":"E-001","name":"x"}]' > "${BAD_SCEN}/scenarios.json"

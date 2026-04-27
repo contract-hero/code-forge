@@ -78,7 +78,12 @@ If Codex disagrees, revise spec and loop. Cap = 3 iterations. After cap, escalat
 
 ### 1c. Add `## E2E Tests` section to `.forge/spec.md`
 
-Each scenario follows this shape (the schema in spec §7.4):
+**Format is non-negotiable.** `scripts/e2e-extract.sh` parses this section into `e2e/scenarios.json`; the parser expects a fenced YAML block. Free-form markdown bullets, prose paragraphs, or Gherkin Given/When/Then break extraction and force the orchestrator to hand-write `scenarios.json`. Don't make that necessary.
+
+**Append exactly this structure to `spec.md`** (replace the example scenarios with your own; keep the heading text, the fenced ```yaml block, and the per-scenario field shape verbatim):
+
+````markdown
+## E2E Tests
 
 ```yaml
 - id: E-001
@@ -96,7 +101,20 @@ Each scenario follows this shape (the schema in spec §7.4):
   expected: Dashboard loads showing zero counter for new user
   covers_contract: [R1.1, R3.2]   # refs spec acceptance criteria
   tooling: chrome-devtools-mcp    # null for cli/api
+
+- id: E-002
+  name: cli help prints usage
+  kind: cli
+  preconditions: []
+  steps:
+    - run "myapp --help"
+  expected: stdout contains 'Usage:'
+  covers_contract: [R5.1]
+  tooling: null
 ```
+````
+
+Required fields per scenario (per spec §7.4): `id` (`E-NNN`), `name`, `kind` (`ui`|`api`|`cli`), `steps` (non-empty list), `expected`. Optional: `preconditions`, `covers_contract`, `tooling`.
 
 Cover the spec's acceptance criteria end-to-end. Don't write per-cycle unit tests here — those live in each cycle's `tests.json`. E2E covers product-level user flows that span cycles.
 
