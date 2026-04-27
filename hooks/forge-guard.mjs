@@ -795,12 +795,22 @@ function parseYamlList(fm, key) {
 }
 
 function parseRequiredSubagents(fm) {
-  // Walk a block-style YAML list of mappings. The schema is fixed enough
-  // that we don't need a full parser.
+  // Walk a block-style YAML list of mappings. Accepts two shapes:
+  //
+  //   1. Same-line: `- match: "..."` opens an entry AND parses the field;
+  //      subsequent indented `subagent_type:` / `applies_to:` lines populate it.
+  //
+  //   2. Multi-line (F13): a bare `-` on its own line opens an empty entry;
+  //      every field (including `match`) arrives on subsequent indented lines.
+  //
+  // Entries with no `match` field are dropped at the end (parser saw a bare
+  // dash but no field lines followed).
   const out = [];
   const lines = fm.split("\n");
   let inSection = false;
   let current = null;
+  const flush = () => { if (current) { out.push(current); current = null; } };
+
   for (const raw of lines) {
     const line = raw.replace(/\s+$/, "");
     if (/^required_subagents:\s*$/.test(line)) {
@@ -808,24 +818,37 @@ function parseRequiredSubagents(fm) {
       continue;
     }
     if (!inSection) continue;
+
     // Section ends when a new top-level key appears (column 0, ends in ':').
     if (/^[A-Za-z_][A-Za-z0-9_]*:/.test(line)) {
-      if (current) out.push(current);
+      flush();
+      inSection = false;
       break;
     }
-    const startMatch = /^\s*-\s*match:\s*"?([^"#]+?)"?\s*(#.*)?$/.exec(line);
-    if (startMatch) {
-      if (current) out.push(current);
-      current = { match: startMatch[1].trim() };
+
+    // Same-line: `- match: "..."` opens an entry AND parses the field.
+    const sameLineStart = /^\s*-\s*match:\s*"?([^"#]+?)"?\s*(#.*)?$/.exec(line);
+    if (sameLineStart) {
+      flush();
+      current = { match: sameLineStart[1].trim() };
       continue;
     }
+
+    // Multi-line: bare `-` on its own line opens an empty entry.
+    if (/^\s*-\s*$/.test(line)) {
+      flush();
+      current = {};
+      continue;
+    }
+
+    // Indented k:v under the current entry.
+    if (!current) continue;
+    const matchKv = /^\s+match:\s*"?([^"#]+?)"?\s*(#.*)?$/.exec(line);
+    if (matchKv) { current.match = matchKv[1].trim(); continue; }
     const subAgentMatch = /^\s+subagent_type:\s*"?([^"#]+?)"?\s*(#.*)?$/.exec(line);
-    if (subAgentMatch && current) {
-      current.subagent_type = subAgentMatch[1].trim();
-      continue;
-    }
+    if (subAgentMatch) { current.subagent_type = subAgentMatch[1].trim(); continue; }
     const appliesMatch = /^\s+applies_to:\s*\[(.*?)\]\s*(#.*)?$/.exec(line);
-    if (appliesMatch && current) {
+    if (appliesMatch) {
       current.applies_to = appliesMatch[1]
         .split(",")
         .map((s) => s.trim().replace(/^["']|["']$/g, ""))
@@ -833,8 +856,10 @@ function parseRequiredSubagents(fm) {
       continue;
     }
   }
-  if (inSection && current) out.push(current);
-  return out;
+  flush();
+  // Drop entries with no `match` (caller's contract is to filter out malformed
+  // bindings rather than silently no-op them at the call site).
+  return out.filter((e) => e.match);
 }
 
 function matchesGlob(pattern, target) {

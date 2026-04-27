@@ -408,6 +408,41 @@ echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","promp
   | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
 assert "F12: contract with no matching file allows" "$?" "0"
 
+# F13 (v0.4.x): parseRequiredSubagents accepts the multi-line YAML shape
+# (bare `-` on its own line, with all fields on subsequent indented lines).
+# Reset state.json + contract.md back to the Sui contract to give the binding
+# something to match against.
+cat > "${GUARD_TEST_DIR}/.forge/state.json" << 'JSON'
+{ "phase": "contract", "current_cycle": 1, "iteration": 0 }
+JSON
+cat > "${GUARD_TEST_DIR}/.forge/cycles/1/contract.md" << 'EOF'
+# Cycle 1 — sui contract
+
+## Behavior
+Move module.
+
+## Files
+- src/foo.move
+- src/index.ts
+
+## Acceptance
+- foo.move compiles.
+EOF
+cat > "${GUARD_TEST_DIR}/.forge/agent-config.md" << 'EOF'
+---
+project_domains: []
+required_subagents:
+  -
+    match: "**/*.move"
+    subagent_type: "sui-pilot:sui-pilot-agent"
+    applies_to: [planner, implementer-worker, reviewer]
+recommended_agents: []
+---
+EOF
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-implementer-worker","prompt":"impl-worker","description":"x"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F13: multi-line YAML binding is parsed and applied" "$?" "2"
+
 rm -rf "$GUARD_TEST_DIR"
 echo ""
 
