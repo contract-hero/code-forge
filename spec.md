@@ -537,11 +537,17 @@ Same shape as move-pr-review's. No changes:
     "name": "counts zero lines for an empty directory",
     "behavior": "sloc(emptyDir) returns 0 with no warnings",
     "kind": "unit",                            // unit | integration | property
-    "target_file": "src/sloc.ts",
+    "target_file": "src/sloc.ts",              // source under test (coverage matrix)
+    "test_file": "tests/sloc.test.ts",         // path of the test code (forge-guard anti-weakening block)
     "covers_contract_requirement": "R1.2"      // refs contract.md anchor
   }
 ]
 ```
+
+**`target_file` vs `test_file`:**
+- `target_file` is the source file the test exercises. It feeds `cycle-coverage.sh`'s reviewer×file matrix and is informational metadata.
+- `test_file` is the path of the test code the test-author writes in the red phase. It feeds forge-guard's `checkTestFileEditDuringGreen` rule — during green phase, edits to any path listed in `test_file` are blocked, preventing the implementer from weakening tests to pass them.
+- Both are required. Multiple tests sharing one test file (the common case) repeat the `test_file` value; one test exercising multiple sources picks a primary `target_file` or splits into multiple entries.
 
 `tests.json` is reviewed and pruned by the orchestrator (or, optionally, by a Codex cross-check) before `red` phase begins.
 

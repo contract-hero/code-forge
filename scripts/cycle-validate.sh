@@ -111,7 +111,8 @@ validate_tests_json() {
         (has("name") | not) or (.name | type != "string") or (.name == "") or
         (has("behavior") | not) or (.behavior | type != "string") or (.behavior == "") or
         (has("kind") | not) or (.kind as $k | $kinds | index($k) == null) or
-        (has("target_file") | not) or (.target_file | type != "string") or (.target_file == "")
+        (has("target_file") | not) or (.target_file | type != "string") or (.target_file == "") or
+        (has("test_file") | not) or (.test_file | type != "string") or (.test_file == "")
       ) | .id // "<missing-id>"
     ]' "$f")
 

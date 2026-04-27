@@ -335,6 +335,44 @@ assert "rule 7 skips outside green phase"     "$?" "0"
 rm -rf "$W7" "$W7B" "$W7C"
 echo ""
 
+# --- target_file/test_file schema split (F1 / v0.3.x) ---
+echo "Section 11.5: F1 — test_file hook block"
+# realpath the temp dir: on macOS mktemp returns /var/... but cwd resolves the
+# /var → /private/var symlink, breaking the hook's string-prefix path
+# comparison. We canonicalize once here to side-step that.
+F1_DIR=$(cd "$(mktemp -d)" && pwd -P)
+mkdir -p "${F1_DIR}/.forge/cycles/1"
+cat > "${F1_DIR}/.forge/state.json" << 'JSON'
+{ "phase": "green", "current_cycle": 1, "iteration": 0 }
+JSON
+cat > "${F1_DIR}/.forge/cycles/1/tests.json" << 'JSON'
+[
+  {"id":"T-001","name":"x","behavior":"x","kind":"unit","target_file":"src/foo.ts","test_file":"tests/foo.test.ts"}
+]
+JSON
+
+# Hook BLOCKS Edit on a test_file path during green
+echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${F1_DIR}/tests/foo.test.ts\"}}" \
+  | (cd "${F1_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F1: hook blocks edit on test_file"   "$?" "2"
+
+# Hook ALLOWS Edit on a target_file source path during green (anti-weakening only blocks tests)
+echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${F1_DIR}/src/foo.ts\"}}" \
+  | (cd "${F1_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F1: hook allows edit on target_file" "$?" "0"
+
+# Schema validation rejects tests.json missing test_file
+cat > "${F1_DIR}/.forge/cycles/1/tests.json" << 'JSON'
+[
+  {"id":"T-001","name":"x","behavior":"x","kind":"unit","target_file":"src/foo.ts"}
+]
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${F1_DIR}/.forge/cycles/1/tests.json" >/dev/null 2>&1
+assert "F1: tests.json without test_file rejects" "$?" "1"
+
+rm -rf "$F1_DIR"
+echo ""
+
 # --- e2e-extract.sh + cycle-e2e-pass.sh + scenarios.json schema (P6 / v0.2.0) ---
 echo "Section 11: Phase F (e2e)"
 

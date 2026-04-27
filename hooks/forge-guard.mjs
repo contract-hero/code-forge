@@ -391,15 +391,18 @@ function checkTestFileEditDuringGreen(filePath, forgeRoot) {
   const tests = loadTestsJson(cycleDir);
   if (tests.length === 0) return null;
 
-  // Resolve filePath to repo-relative for comparison; tests.json target_files
-  // are typically repo-relative.
+  // Resolve filePath to repo-relative for comparison; tests.json test_file
+  // values are repo-relative.
   const repoRoot = resolve(forgeRoot, "..");
   const relPath = filePath.startsWith(repoRoot + "/")
     ? filePath.slice(repoRoot.length + 1)
     : filePath;
 
-  const targets = new Set(tests.map((t) => t.target_file).filter(Boolean));
-  if (!targets.has(relPath) && !targets.has(filePath)) return null;
+  // v0.3.x: schema split — the hook now reads `test_file` (path of the test
+  // code), not `target_file` (path of the source under test). Anti-weakening
+  // means we block edits to test files; sources are the implementer's job.
+  const testFiles = new Set(tests.map((t) => t.test_file).filter(Boolean));
+  if (!testFiles.has(relPath) && !testFiles.has(filePath)) return null;
 
   return [
     "[BLOCK] Forge Guard: test-file edit blocked during green phase",

@@ -35,12 +35,20 @@ Your job: produce `cycles/N/tests.json` containing test names and target behavio
     "behavior": "sloc(emptyDir) returns 0 with no warnings",
     "kind": "unit",
     "target_file": "src/sloc.ts",
+    "test_file": "tests/sloc.test.ts",
     "covers_contract_requirement": "R1.2"
   }
 ]
 ```
 
-Required fields: `id` (T-NNN), `name`, `behavior`, `kind` (unit | integration | property), `target_file`. Optional: `covers_contract_requirement`.
+Required fields: `id` (T-NNN), `name`, `behavior`, `kind` (unit | integration | property), `target_file`, `test_file`. Optional: `covers_contract_requirement`.
+
+**`target_file` vs `test_file` — the distinction matters:**
+
+- **`target_file`** is the *source under test* — the file the implementer will write or modify so this test passes (e.g. `src/sloc.ts`). It feeds the coverage matrix (`cycle-coverage.sh`) and is informational metadata.
+- **`test_file`** is the *path of the test code itself* — the file you (the test-author) write in Phase 2 / red (e.g. `tests/sloc.test.ts`). It feeds forge-guard's anti-weakening rule: during green phase, `checkTestFileEditDuringGreen` blocks any Edit/Write to a path listed in `test_file`. Get this right or the implementer can edit your tests.
+
+Both fields are required and must point at concrete repo-relative paths. If a test exercises multiple source files, pick the *primary* one for `target_file` (or split into multiple test entries with the same `test_file`). If multiple tests share a test file (the common case), they will share the same `test_file` value.
 
 Coverage discipline:
 - Every contract requirement should map to ≥ 1 test.
@@ -55,7 +63,7 @@ After writing `tests.json`, the orchestrator validates and prunes. You may be re
 Input: pruned `tests.json` from phase 1.
 
 Your job:
-1. Write the actual test code in the appropriate test files (paths derive from `target_file` + project's testing convention).
+1. Write the actual test code in the test files **at the exact `test_file` paths you recorded in Phase 1**. Do not invent new test paths during red — the orchestrator's tests.json is now authoritative for the hook-block rule, so deviation breaks anti-weakening enforcement.
 2. Run the test suite via `bash ${CLAUDE_PLUGIN_ROOT}/scripts/cycle-tests-pass.sh red .forge/cycles/N/ -- <project test command>`.
 3. The script INVERTS exit codes: 0 means tests failed correctly (red phase passes); non-zero means tests passed (tautological — they don't actually exercise the behavior). If you get non-zero from the script, your tests are wrong.
 
