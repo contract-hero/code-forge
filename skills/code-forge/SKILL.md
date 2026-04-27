@@ -24,7 +24,7 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
 author: alilloig
-version: 0.1.0
+version: 0.2.0
 ---
 
 # Code Forge v2 — Cycle Protocol
@@ -41,27 +41,31 @@ You are the orchestrator of Code Forge v2. Your job is to **dispatch the forge-o
 2. Tell the user: "code-forge requires the Task tool — run /forge from the top-level session."
 3. Do not try to simulate the cycle. The whole point is independent reviewer dispatch.
 
-## What's new in v2
+## What's new in v2 (and what v0.2.0 adds)
 
+**v0.1.0 baseline:**
 - **TDD as a first-class cycle phase.** Old cycle: `contract → implementation → evaluation`. New cycle: `contract → test-list → red → green → consolidated-review`. The test-author agent writes tests *before* the implementer touches code. forge-guard rule 5 blocks the implementer from editing test files during green — anti-weakening.
 - **Script-coordinated parallel review.** The single evaluator is replaced by N reviewers (default 6) fanning out across dimensions — `correctness, design, error-handling, simplicity, tests-vs-impl, security`. A consolidator synthesizes their findings via `cycle-consolidate.mjs`. Pattern adopted from `~/.claude/sui-pilot/skills/move-pr-review/`.
-- **Quality gates as code.** Phase advancement requires script-passing, not agent narration. `cycle-validate.sh`, `cycle-coverage.sh`, `cycle-pass.sh`, `cycle-tests-pass.sh` (with red-phase exit-code inversion).
-- **forge-guard hooks extended.** Five new rules around TDD discipline, parallel reviewer fan-out, post-cycle freeze, and auto-validation on schema artifact edits. See `hooks/forge-guard.mjs`.
+- **Quality gates as code.** Phase advancement requires script-passing, not agent narration.
 - **Thin orchestrator.** The four v1 orchestrators (preparation, planning, cycle, final-review) are compressed into one `forge-orchestrator` that drives the cycle by invoking scripts.
 
-## Pre-cycle phases (carried forward from v1)
+**v0.2.0 amendments (this version):**
+- **Codex-mediated Phase 0 (claudex).** The pre-cycle compresses from 7 phases to 3. Phase 0 wraps the `codex-bridge:claudex` skill — multi-round Claude↔Codex refinement plus plan-mode AskUserQuestion clarification — and lands `plan.md`. `--quick` flag skips Phase 0 for trivial tasks.
+- **E2E tests as cross-cycle invariant (Phase F).** spec.md gains a `## E2E Tests` section. After all cycles pass, Phase F dispatches reviewers ×N over scenarios with `MODE=e2e`; `cycle-e2e-pass.sh` gates ship; failures spawn a remediation cycle (cap = 3).
+- **Best-of-N implementer (green phase).** 1 Opus coordinator + N=6 Sonnet workers (env `IMPLEMENTERS`). Each worker emits an independent candidate; coordinator runs each against tests, picks the simplest passer, writes `synthesis-notes.md`. forge-guard rule 7 blocks serial worker dispatch.
+- **Specialist routing + project_domains.** Phase 1 emits `agent-config.md` with three blocks: `project_domains` (top-level tags like `sui-dapp` — when present, force sui-pilot for ALL Task dispatches via prompt injection), `required_subagents` (glob-based hard routing), `recommended_agents` (soft roster favoring the user's enabled plugins). forge-guard rule 6 hard-blocks subagent_type mismatches.
 
-These phases run once before the per-cycle work begins. Codex cross-check gates (G1, G2) remain in place; forge-guard advisories still fire.
+## Pre-cycle phases (compressed in v0.2.0: 7 → 3)
 
-1. **Intent sharpening (Phase 0)** — Clarify the lazy prompt with the user. Output: `.forge/intent.md`.
-2. **Codebase exploration (Phase 0.5, optional)** — Skip if greenfield. Dispatch the `codebase-explorer` agent (1–3 in parallel) to index the existing repo. Output: `.forge/codebase-analysis.md`.
-3. **Prompt refinement (Phase 1)** — Iterate the planning prompt with Codex (G1). Output: `.forge/planning-prompt.md` + `.forge/prompt-evolution.md`.
-4. **Agent detection (Phase 1.5, optional)** — Detect domain-specific subagents. Output: `.forge/agent-config.md`.
-5. **Specification (Phase 2)** — Dispatch the `planner` agent. Output: `.forge/spec.md`.
-6. **Spec critique (Phase 2.5)** — Codex critiques the spec (G2). Output: `.forge/spec-critique.md`.
-7. **Cycle planning (Phase 3)** — Break the spec into ordered cycles. Output: `.forge/cycle-plan.md`.
+| Phase | Owner | Artifact | Codex gates |
+|---|---|---|---|
+| **0 — Plan** | forge-orchestrator (wraps `codex-bridge:claudex`) | `.forge/plan.md` | G1 (intrinsic to claudex's multi-round flow) |
+| **1 — Spec & e2e** | `planner` in `spec-and-e2e` mode | `.forge/spec.md` (with `## E2E Tests`), `.forge/agent-config.md` | G2.a (plan↔spec), G2.b (spec↔e2e), each capped at 3 iterations |
+| **2 — Cycle plan** | `planner` in `cycle-plan` mode | `.forge/cycle-plan.md` | G2.5 (cycle plan vs spec) |
 
-After Phase 3, the forge-orchestrator agent takes over and drives the per-cycle loop.
+For extension prompts, the codebase-explorer is dispatched from inside the Phase 0 plan-mode flow rather than as a separate phase. After Phase 2, the forge-orchestrator enters the per-cycle loop.
+
+`--quick` flag (passed via `/forge`'s args) skips Phase 0; the lazy prompt becomes `plan.md` verbatim.
 
 ## Per-cycle phases (the v2 loop)
 
@@ -69,17 +73,27 @@ For each cycle in `cycle-plan.md`:
 
 | Phase | Owner | Artifact | Gate |
 |---|---|---|---|
-| `contract` | `planner` | `cycles/N/contract.md` | `cycle-validate.sh` ✓ + Codex G5 (optional) |
+| `contract` | `planner` (contract mode) | `cycles/N/contract.md` | `cycle-validate.sh` ✓ + Codex G5 (optional) |
 | `test-list` | `test-author` | `cycles/N/tests.json` | `cycle-validate.sh` ✓ + orchestrator review |
 | `red` | `test-author` | `cycles/N/red.log` + `red.json` | `cycle-tests-pass.sh red` exit 0 (= tests fail correctly) |
-| `green` | `implementer` | `cycles/N/green.log` + `green.json` | `cycle-tests-pass.sh green` exit 0 (= tests pass) + `forge-guard rule 5` (no test-file edits) |
+| `green` (best-of-N) | `implementer` (Opus coordinator) + N=6 `implementer-worker`s (Sonnet) | `cycles/N/green/candidates/worker-K/`, `synthesis-notes.md`, `green.log` | `cycle-tests-pass.sh green` exit 0 against the chosen candidate + forge-guard rules 5/7/8 (no test-file edits across 1+N family; no serial worker dispatch) |
 | `consolidated-review` | `reviewer` ×N + `consolidator` | `cycles/N/_consolidated.json` + `cycles/N/review.md` | `cycle-pass.sh` exit 0 (no critical, no disputed) + Codex G5 (optional) |
 
-**Single-turn dispatch is load-bearing for `consolidated-review`.** All N reviewers must be dispatched in one assistant message via N parallel `Agent` tool calls with `run_in_background: true`. Serial dispatch loses parallelism *and* independence (later reviewers can recall earlier outputs from context). forge-guard rule 6 enforces this — it blocks a second `reviewer` Agent call if a previous reviewer's output appeared >5 seconds ago.
+**Single-turn dispatch is load-bearing** for both `green` (worker fan-out) and `consolidated-review` (reviewer fan-out). All workers / reviewers must be dispatched in one assistant message via parallel `Agent` tool calls with `run_in_background: true`. Serial dispatch loses parallelism *and* independence. forge-guard rules 3 and 7 enforce this.
 
-## Final review
+## Post-cycle: Phase F — e2e-review
 
-After the last cycle in the plan completes, the forge-orchestrator runs a final pass: invoke the consolidated-review pipeline against the entire deliverable (not just the last cycle's contract scope). Output: `.forge/final-review.md`. Codex G6 cross-check on the final artifact.
+Triggered after the last cycle's `consolidated-review` passes, when `spec.md` contains a `## E2E Tests` section.
+
+| Step | Owner | Artifact | Gate |
+|---|---|---|---|
+| Extract scenarios | `e2e-extract.sh` | `.forge/e2e/scenarios.json` | `cycle-validate.sh` ✓ |
+| Review scenarios | `reviewer` ×N (`MODE=e2e`) — Chrome MCP for `kind: ui`, harness for `cli`/`api` | `.forge/e2e/reviewers/subagent-K.json` | `cycle-validate.sh` ✓ |
+| Consolidate | `consolidator` (`MODE=e2e`) | `.forge/e2e/_consolidated.json`, `.forge/e2e/review.md` | `cycle-e2e-pass.sh` exit 0 (no critical, every scenario covered) |
+
+If `cycle-e2e-pass.sh` fails, a **remediation cycle** is spawned (`cycles/N+1/`) with a contract derived from the e2e gaps. Cap = 3 remediation cycles before escalating to the user.
+
+If `spec.md` has no `## E2E Tests` section, Phase F is skipped. forge-guard advises at Phase 1 exit when cycle-plan has >1 cycle and no e2e tests are declared.
 
 ## Scripts (the protocol made executable)
 
@@ -88,12 +102,15 @@ All scripts in `${CLAUDE_PLUGIN_ROOT}/scripts/`:
 | Script | Use |
 |---|---|
 | `cycle-init.sh <cycle-dir>` | Scaffold a cycle directory with empty schema-valid stubs. Run at the start of each cycle. |
-| `cycle-validate.sh <path>` | Validate cycle artifacts (contract.md, tests.json, subagent-*.json) against schema. |
+| `cycle-validate.sh <path>` | Validate cycle artifacts (plan.md, spec.md, agent-config.md, cycle-plan.md, contract.md, tests.json, scenarios.json, subagent-*.json) against schema. |
 | `cycle-tests-pass.sh red\|green <cycle-dir> -- <test-cmd>` | Run the project's test command, write red.log/green.log + JSON metadata, INVERT exit code for red phase. |
 | `cycle-coverage.sh <reviewers-dir>` | File × reviewer coverage matrix; flag files below floor (default 3 of 6) for R0 leader backfill. |
 | `cycle-consolidate.mjs <reviewers-dir>` | Cluster reviewer findings, emit `_consolidated.json`. |
 | `cycle-pass.sh <cycle-dir>` | Read `_consolidated.json`; exit 0 iff no critical AND no disputed clusters. The cycle-pass gate. |
+| `e2e-extract.sh <spec.md> <out-scenarios.json>` | Parse `## E2E Tests` from spec.md into `scenarios.json` for Phase F. |
+| `cycle-e2e-pass.sh <e2e-dir>` | Read `e2e/_consolidated.json` + `e2e/scenarios.json`; exit 0 iff no critical AND every scenario has at least one passing reviewer touch. The ship gate. |
 | `forge-status.sh [<forge-dir>]` | Human-readable progress dashboard. User can run anytime. |
+| `deploy.sh [--dry-run\|--check]` | Sync the repo's plugin tree to `~/.claude/plugins/code-forge-v2/`. Run after committing changes. |
 
 The skill file does NOT paraphrase what these scripts do. The scripts are the protocol.
 
@@ -106,16 +123,19 @@ The skill file does NOT paraphrase what these scripts do. The scripts are the pr
 `hooks/forge-guard.mjs` codifies the protocol invariants:
 
 **Blocking rules (exit code 2 — tool call rejected):**
-- No implementation without contract (carried from rig)
-- No advancing past a failed cycle review (extended in v2 to use `_consolidated.json`)
-- Test-file edit block during green phase (v2 rule 5)
-- Parallel reviewer fan-out enforcement (v2 rule 6) — blocks serial dispatch
-- Post-cycle freeze on contract files (v2 rule 7)
+- No implementation without contract (rule 1, carried from rig)
+- No advancing past a failed cycle review (rule 2, extended in v2 to use `_consolidated.json`)
+- Test-file edit block during green phase (rule 5, v2; extended in v0.2.0 to all 11 agents in the implementer family — coordinator + N workers — see rule 8)
+- Parallel reviewer fan-out enforcement (rule 3, v2) — blocks serial dispatch
+- Post-cycle freeze on contract files (rule 4, v2)
+- **Specialist routing (rule 6, v0.2.0)** — when `agent-config.md` declares a `project_domain` (e.g. `sui-dapp`) every Task dispatch must use the matching `subagent_type` (e.g. `sui-pilot:sui-pilot-agent`); also enforces `required_subagents` glob bindings as fallback.
+- **Implementer-worker fan-out (rule 7, v0.2.0)** — during green phase, blocks a second `implementer-worker` Task call dispatched after another worker's candidate directory has appeared.
 
 **Advisory rules (exit 0, message to stderr — does NOT block):**
 - Phase ordering / prerequisite-artifact checks (carried from rig)
 - Codex gate artifacts present (carried from rig; respects `--light` mode)
-- Auto-validate on schema artifact edits (v2 rule 8)
+- Auto-validate on schema artifact edits (rule 9, v2 — fires `cycle-validate.sh` on writes to schema-bearing files)
+- Phase 1 exit warning when cycle-plan has >1 cycle and `spec.md` lacks `## E2E Tests`
 
 If you see `[BLOCK] Forge Guard:` the tool call has been rejected — fix the underlying issue, do not paper over it. If you see `[ADVISE] Forge Guard:` you should investigate; the call still went through.
 
@@ -131,9 +151,9 @@ If `.forge/state.json` exists in cwd when `/forge` is invoked, the forge-orchest
 
 After parsing flags from `$ARGUMENTS` and creating `.forge/state.json` for a fresh run:
 
-1. Initialize `.forge/state.json` with the parsed flags and `phase: "intent"`.
+1. Initialize `.forge/state.json` with the parsed flags and `phase: "plan"` (or `phase: "spec-and-e2e"` if `--quick`).
 2. Dispatch the **forge-orchestrator** agent with the lazy prompt and the path to `.forge/`.
-3. The forge-orchestrator runs the seven pre-cycle phases, then loops cycles until done.
+3. The forge-orchestrator runs Phase 0 → Phase 1 → Phase 2, then loops cycles, then runs Phase F (if applicable).
 4. When `.forge/state.json` reports `phase: "done"`, surface the final review path to the user.
 
 That's the protocol. The scripts and forge-orchestrator carry the rest.
