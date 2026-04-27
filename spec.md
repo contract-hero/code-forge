@@ -126,7 +126,7 @@ Each new phase has:
 | Phase | Owner | Artifact | Forge-guard rule |
 |---|---|---|---|
 | `contract` | `planner` | `cycles/<n>/contract.md` | (existing rule: no implementation before contract) |
-| `test-list` | `test-author` | `cycles/<n>/tests.json` (schema: `name`, `behavior`, `kind`, `target_file`) | Block writes to `src/` until `tests.json` exists and validates. |
+| `test-list` | `test-author` | `cycles/<n>/tests.json` (schema: `name`, `behavior`, `kind`, `target_file`, `test_file`) | Block writes to `src/` until `tests.json` exists and validates. |
 | `red` | `test-author` | `cycles/<n>/red.log` (test runner stderr/exit code) | `PostToolUse(Bash)` after the test command checks exit ≠ 0. If 0, fail the phase — the test was tautological. |
 | `green` | `implementer` | `cycles/<n>/green.log` (test runner exit code = 0) | `PreToolUse(Edit)` on test files during this phase → block. (Anti-weakening rule; rationale in §13.) |
 | `consolidated-review` | `reviewer` × N + `consolidator` | `cycles/<n>/_consolidated.json` + `cycles/<n>/review.md` | Cycle pass requires no `critical` clusters and `disputed_severity=true` count = 0. |
@@ -195,7 +195,7 @@ green phase:
 
 **Pick-best, not merge.** Synthesis is *selection*, not *combining*. Fast, deterministic, debuggable. Frankenstein-merging multiple candidates risks code that no single agent produced and hides the diversity signal. If a future cycle needs merge mode, add a `--synthesize` flag; default stays pick-best.
 
-**Forge-guard rule 5 still applies to all 11 agents.** Coordinator and all workers are blocked from editing test files in green. Test files are read-only; only `target_file` paths from `tests.json` are eligible for write.
+**Forge-guard rule 5 still applies to all 11 agents.** Coordinator and all workers are blocked from editing test files in green. Files listed under `test_file` in `tests.json` are read-only; only `target_file` paths (the source under test) are eligible for write.
 
 **Diversity signal.** If all 6 workers converge on the same wrong implementation, that's information — flag it in `synthesis-notes.md` as "low diversity, likely shared blind spot." Counter (deferred to v0.3.x): re-dispatch with different prompt seeds or different model checkpoints.
 
@@ -636,7 +636,7 @@ The current rig hook (`code-forge-rig/hooks/forge-guard.mjs`, 348 lines) covers 
 
 New rules to add:
 
-1. **`PreToolUse(Edit)` test-file-during-green block** — match path against `tests.json` `target_file`s; reject if current phase is `green` and the editing agent isn't `test-author`.
+1. **`PreToolUse(Edit)` test-file-during-green block** — match path against `tests.json` `test_file`s (the test code paths); reject if current phase is `green` and the editing agent isn't `test-author`. The hook also peels the `cycles/<n>/green/candidates/worker-<k>/files/` prefix so worker-staged candidate writes are blocked at write time, before the coordinator's rsync apply.
 2. **`PostToolUse(Bash)` red-phase exit-code requirement** — when in `red` phase and command was the test runner, require exit code ≠ 0. If 0, mark phase failed and re-dispatch test-author with feedback "tests passed at red, are they tautological?"
 3. **`PreToolUse(Agent)` parallel-fan-out enforcement** — during `consolidated-review`, if a `reviewer` Agent call is dispatched more than 5 seconds after a previous `reviewer` Agent call has completed (rather than co-issued in the same turn), reject. Pushes orchestrator to dispatch all reviewers in one turn.
 4. **`PreToolUse(Edit)` post-cycle-pass freeze** — after a cycle's `_consolidated.json` is sealed (no critical, no disputed), block edits to files mentioned in that cycle's `contract.md` until next cycle's `contract` phase begins. Prevents implementer-after-review drift.

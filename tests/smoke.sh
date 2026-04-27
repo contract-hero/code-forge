@@ -32,6 +32,26 @@ assert() {
   fi
 }
 
+# Stand up a temp dir with a green-phase .forge/ scaffolding for hook tests.
+# realpath the temp dir: on macOS mktemp returns /var/... but cwd resolves
+# the /var → /private/var symlink, breaking the hook's string-prefix path
+# comparison. Canonicalize once here.
+# Args: $1 test_file path; $2 optional target_file (default src/foo.ts).
+# Echoes the temp dir path; caller is responsible for `rm -rf` cleanup.
+setup_green_phase_fixture() {
+  local test_file="$1"
+  local target_file="${2:-src/foo.ts}"
+  local dir
+  dir=$(cd "$(mktemp -d)" && pwd -P)
+  mkdir -p "${dir}/.forge/cycles/1"
+  cat > "${dir}/.forge/state.json" << 'JSON'
+{ "phase": "green", "current_cycle": 1, "iteration": 0 }
+JSON
+  printf '[{"id":"T-001","name":"x","behavior":"x","kind":"unit","target_file":"%s","test_file":"%s"}]\n' \
+    "$target_file" "$test_file" > "${dir}/.forge/cycles/1/tests.json"
+  echo "$dir"
+}
+
 echo "=== code-forge-v2 smoke test ==="
 echo "Plugin root: $PLUGIN_ROOT"
 echo ""
@@ -350,16 +370,8 @@ echo ""
 
 # --- F4: worker candidate-prefix peel for test-file blocking ---
 echo "Section 10.5: F4 — candidate-staging prefix peel"
-F4_DIR=$(cd "$(mktemp -d)" && pwd -P)
+F4_DIR=$(setup_green_phase_fixture "test/strip-ansi.test.ts" "src/strip-ansi.ts")
 mkdir -p "${F4_DIR}/.forge/cycles/1/green/candidates/worker-3/files"
-cat > "${F4_DIR}/.forge/state.json" << 'JSON'
-{ "phase": "green", "current_cycle": 1, "iteration": 0 }
-JSON
-cat > "${F4_DIR}/.forge/cycles/1/tests.json" << 'JSON'
-[
-  {"id":"T-001","name":"x","behavior":"x","kind":"unit","target_file":"src/strip-ansi.ts","test_file":"test/strip-ansi.test.ts"}
-]
-JSON
 
 # Worker writing to a test_file path INSIDE its candidate dir → BLOCK
 echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${F4_DIR}/.forge/cycles/1/green/candidates/worker-3/files/test/strip-ansi.test.ts\"}}" \
@@ -376,19 +388,7 @@ echo ""
 
 # --- target_file/test_file schema split (F1 / v0.3.x) ---
 echo "Section 11.5: F1 — test_file hook block"
-# realpath the temp dir: on macOS mktemp returns /var/... but cwd resolves the
-# /var → /private/var symlink, breaking the hook's string-prefix path
-# comparison. We canonicalize once here to side-step that.
-F1_DIR=$(cd "$(mktemp -d)" && pwd -P)
-mkdir -p "${F1_DIR}/.forge/cycles/1"
-cat > "${F1_DIR}/.forge/state.json" << 'JSON'
-{ "phase": "green", "current_cycle": 1, "iteration": 0 }
-JSON
-cat > "${F1_DIR}/.forge/cycles/1/tests.json" << 'JSON'
-[
-  {"id":"T-001","name":"x","behavior":"x","kind":"unit","target_file":"src/foo.ts","test_file":"tests/foo.test.ts"}
-]
-JSON
+F1_DIR=$(setup_green_phase_fixture "tests/foo.test.ts")
 
 # Hook BLOCKS Edit on a test_file path during green
 echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${F1_DIR}/tests/foo.test.ts\"}}" \
@@ -401,11 +401,8 @@ echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${F1_DIR}/src/foo.
 assert "F1: hook allows edit on target_file" "$?" "0"
 
 # Schema validation rejects tests.json missing test_file
-cat > "${F1_DIR}/.forge/cycles/1/tests.json" << 'JSON'
-[
-  {"id":"T-001","name":"x","behavior":"x","kind":"unit","target_file":"src/foo.ts"}
-]
-JSON
+printf '[{"id":"T-001","name":"x","behavior":"x","kind":"unit","target_file":"src/foo.ts"}]\n' \
+  > "${F1_DIR}/.forge/cycles/1/tests.json"
 bash "${SCRIPTS}/cycle-validate.sh" "${F1_DIR}/.forge/cycles/1/tests.json" >/dev/null 2>&1
 assert "F1: tests.json without test_file rejects" "$?" "1"
 

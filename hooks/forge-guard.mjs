@@ -133,6 +133,28 @@ function isForgeArtifact(filePath) {
   return filePath && filePath.includes(".forge/");
 }
 
+// Strip the absolute repoRoot prefix from filePath. If filePath is not under
+// repoRoot, returns it unchanged. Used by phase-aware path checks that need
+// repo-relative comparison against tests.json / contract.md entries.
+function makeRepoRelative(filePath, repoRoot) {
+  return filePath.startsWith(repoRoot + "/")
+    ? filePath.slice(repoRoot.length + 1)
+    : filePath;
+}
+
+// Best-of-N workers stage candidate implementations under
+// .forge/cycles/<n>/green/candidates/worker-<k>/files/<repo-relative-path>
+// (per agents/implementer-worker.md). Hooks comparing against repo-relative
+// paths in tests.json need to peel that prefix to recognize a worker's
+// candidate write as targeting the same repo path.
+const CANDIDATE_STAGING_RE =
+  /^\.forge\/cycles\/\d+\/green\/candidates\/worker-\d+\/files\/(.+)$/;
+
+function peelCandidatePrefix(relPath) {
+  const m = relPath.match(CANDIDATE_STAGING_RE);
+  return m ? m[1] : null;
+}
+
 function listFilesInContract(contractPath) {
   // Extract bullet-list paths from the "## Files" section of contract.md.
   // Format expected: "- path/to/file.ext — description"
@@ -391,33 +413,17 @@ function checkTestFileEditDuringGreen(filePath, forgeRoot) {
   const tests = loadTestsJson(cycleDir);
   if (tests.length === 0) return null;
 
-  // Resolve filePath to repo-relative for comparison; tests.json test_file
-  // values are repo-relative.
+  // tests.json test_file values are repo-relative; normalize filePath so we
+  // can compare in one Set.has lookup. Also peel the worker candidate-staging
+  // prefix when present — the coordinator's rsync apply is Bash-level and
+  // invisible to forge-guard, so blocking at the worker's write time is the
+  // only defense against test-file weakening landing in the repo.
   const repoRoot = resolve(forgeRoot, "..");
-  const relPath = filePath.startsWith(repoRoot + "/")
-    ? filePath.slice(repoRoot.length + 1)
-    : filePath;
+  const relPath = makeRepoRelative(filePath, repoRoot);
+  const candidateResidue = peelCandidatePrefix(relPath);
 
-  // v0.3.x F4: best-of-N workers stage candidates under
-  // .forge/cycles/<n>/green/candidates/worker-<k>/files/<repo-relative-path>.
-  // A test-file edit at that staging path doesn't match the bare repo-relative
-  // path in tests.json, so we peel the prefix and compare the residue too.
-  // The coordinator's later rsync apply is invisible to forge-guard (Bash is
-  // not hooked), so blocking at worker write time is the only defense.
-  const candidateMatch = relPath.match(
-    /^\.forge\/cycles\/\d+\/green\/candidates\/worker-\d+\/files\/(.+)$/
-  );
-  const candidateResidue = candidateMatch ? candidateMatch[1] : null;
-
-  // v0.3.x: schema split — the hook now reads `test_file` (path of the test
-  // code), not `target_file` (path of the source under test). Anti-weakening
-  // means we block edits to test files; sources are the implementer's job.
   const testFiles = new Set(tests.map((t) => t.test_file).filter(Boolean));
-  if (
-    !testFiles.has(relPath) &&
-    !testFiles.has(filePath) &&
-    !(candidateResidue && testFiles.has(candidateResidue))
-  ) {
+  if (!testFiles.has(relPath) && !(candidateResidue && testFiles.has(candidateResidue))) {
     return null;
   }
 
@@ -844,11 +850,8 @@ function checkPostCycleFreeze(filePath, forgeRoot) {
   const protectedFiles = listFilesInContract(contractPath);
   if (protectedFiles.length === 0) return null;
 
-  // Resolve filePath to repo-relative
   const repoRoot = resolve(forgeRoot, "..");
-  const relPath = filePath.startsWith(repoRoot + "/")
-    ? filePath.slice(repoRoot.length + 1)
-    : filePath;
+  const relPath = makeRepoRelative(filePath, repoRoot);
 
   if (!protectedFiles.includes(relPath)) return null;
 
