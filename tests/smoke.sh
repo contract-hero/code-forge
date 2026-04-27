@@ -554,6 +554,84 @@ grep -q "tools: Read, Bash" "${PLUGIN_ROOT}/agents/implementer.md"
 assert "F8: implementer.md tools narrowed to Read, Bash"        "$?" "0"
 echo ""
 
+# --- F9: paused / pause_history schema + forge-status banner ---
+echo "Section 11.8: F9 — paused state schema"
+F9_DIR=$(mktemp -d)
+
+# Valid paused state.json validates
+cat > "${F9_DIR}/state.json" << 'JSON'
+{
+  "phase": "cycle-plan",
+  "current_cycle": 0,
+  "total_cycles": 0,
+  "paused": true,
+  "pause_history": [
+    {
+      "paused_at": "2026-04-27T19:50:00Z",
+      "reason": "G-Boot failed: pnpm deploy-all errors",
+      "gate": "G-Boot"
+    }
+  ]
+}
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${F9_DIR}/state.json" >/dev/null 2>&1
+assert "F9: valid paused state.json validates" "$?" "0"
+
+# v0.3.x state.json (no paused/pause_history) still validates
+cat > "${F9_DIR}/state.json" << 'JSON'
+{
+  "phase": "green",
+  "current_cycle": 1,
+  "iteration": 0
+}
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${F9_DIR}/state.json" >/dev/null 2>&1
+assert "F9: v0.3.x state.json (no paused fields) still validates" "$?" "0"
+
+# pause_history entry missing required field → reject
+cat > "${F9_DIR}/state.json" << 'JSON'
+{
+  "phase": "cycle-plan",
+  "paused": true,
+  "pause_history": [
+    { "paused_at": "2026-04-27T19:50:00Z" }
+  ]
+}
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${F9_DIR}/state.json" >/dev/null 2>&1
+assert "F9: pause_history missing reason rejects" "$?" "1"
+
+# paused: true with empty pause_history → reject
+cat > "${F9_DIR}/state.json" << 'JSON'
+{ "phase": "cycle-plan", "paused": true, "pause_history": [] }
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${F9_DIR}/state.json" >/dev/null 2>&1
+assert "F9: paused=true with empty history rejects" "$?" "1"
+
+# forge-status.sh renders the *** PAUSED *** banner when paused
+mkdir -p "${F9_DIR}/cycles"
+cat > "${F9_DIR}/state.json" << 'JSON'
+{
+  "phase": "cycle-plan",
+  "current_cycle": 0,
+  "total_cycles": 0,
+  "paused": true,
+  "pause_history": [
+    {
+      "paused_at": "2026-04-27T19:50:00Z",
+      "reason": "G-Boot failed",
+      "gate": "G-Boot"
+    }
+  ]
+}
+JSON
+OUT=$(bash "${SCRIPTS}/forge-status.sh" "${F9_DIR}" 2>/dev/null || true)
+echo "$OUT" | grep -q "\*\*\* PAUSED \*\*\*"
+assert "F9: forge-status.sh renders PAUSED banner" "$?" "0"
+
+rm -rf "$F9_DIR"
+echo ""
+
 # --- e2e-extract.sh + cycle-e2e-pass.sh + scenarios.json schema (P6 / v0.2.0) ---
 echo "Section 11: Phase F (e2e)"
 

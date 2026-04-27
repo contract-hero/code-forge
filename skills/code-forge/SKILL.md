@@ -156,9 +156,10 @@ If `.forge/state.json` exists in cwd when `/forge` is invoked, resume from the r
 
 ## Driving the protocol
 
-After parsing flags from `$ARGUMENTS` and creating `.forge/state.json` for a fresh run:
+After parsing flags from `$ARGUMENTS`:
 
-1. Initialize `.forge/state.json` with the parsed flags and `phase: "plan"` (or `phase: "spec-and-e2e"` if `--quick`).
+0. **Resume check (F9, v0.4.x).** If `.forge/state.json` already exists and `state.paused === true`, the previous run halted on a failed decision gate. Read the most recent `pause_history` entry, then `AskUserQuestion` with three options: Resume the gate, Abort the run, or Restart (wipe `.forge/`). Don't auto-advance over a paused state. If `paused !== true` (or state.json doesn't exist for a fresh run), continue with step 1.
+1. Initialize `.forge/state.json` (fresh run only) with the parsed flags and `phase: "plan"` (or `phase: "spec-and-e2e"` if `--quick`).
 2. Read `agents/forge-orchestrator.md` — it's the procedure manual for the run shape (Phase 0/1/2, per-cycle phases, Phase F) and the gate scripts.
 3. Drive the protocol step-by-step yourself:
    - Phase 0 (Plan): wrap `codex-bridge:claudex` on the lazy prompt; write `.forge/plan.md`. Skip when `--quick`.

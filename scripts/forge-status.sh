@@ -21,6 +21,22 @@ echo ""
 # Top-level state
 if [[ -f "$FORGE_DIR/state.json" ]]; then
   if command -v jq >/dev/null 2>&1; then
+    # F9 (v0.4.x): paused-run banner. Print first so a user scanning the
+    # output cannot miss that the run halted pending their input.
+    PAUSED=$(jq -r '.paused // false' "$FORGE_DIR/state.json" 2>/dev/null || echo "false")
+    if [[ "$PAUSED" == "true" ]]; then
+      P_GATE=$(jq -r '(.pause_history // []) | last | .gate // "?"' "$FORGE_DIR/state.json" 2>/dev/null)
+      P_AT=$(jq -r '(.pause_history // []) | last | .paused_at // "?"' "$FORGE_DIR/state.json" 2>/dev/null)
+      P_REASON=$(jq -r '(.pause_history // []) | last | .reason // "?"' "$FORGE_DIR/state.json" 2>/dev/null)
+      echo "*** PAUSED ***"
+      echo "  gate:        ${P_GATE}"
+      echo "  paused_at:   ${P_AT}"
+      echo "  reason:      ${P_REASON}"
+      echo "  Resume by re-invoking /forge from this directory; the orchestrator"
+      echo "  will prompt with Resume / Abort / Restart."
+      echo ""
+    fi
+
     PHASE=$(jq -r '.phase // "?"' "$FORGE_DIR/state.json" 2>/dev/null || echo "?")
     CYCLE=$(jq -r '.current_cycle // "?"' "$FORGE_DIR/state.json" 2>/dev/null || echo "?")
     CYC_STATUS=$(jq -r '.cycle_status // "?"' "$FORGE_DIR/state.json" 2>/dev/null || echo "?")
