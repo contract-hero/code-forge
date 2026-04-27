@@ -1,0 +1,1 @@
+{ "worker": 4, "target_files": ["src/strip-ansi.ts"], "lines_changed": 3, "complexity_proxy": 1, "blocked": false, "tests_pass": true }

@@ -1,0 +1,1 @@
+{ "worker": 2, "target_files": [], "lines_changed": 0, "complexity_proxy": 0, "blocked": true, "reason": "contract ambiguous on cursor sequences" }

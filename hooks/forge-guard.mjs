@@ -486,6 +486,82 @@ function checkParallelReviewerFanout(toolInput, forgeRoot) {
 }
 
 /**
+ * Rule 7 (v0.2.0 §8 rule 7): Implementer-worker fan-out enforcement.
+ *
+ * During green phase, blocks a second `implementer-worker` Task dispatch
+ * fired after another worker's candidate directory already exists. The
+ * coordinator must dispatch all N workers in a single assistant turn so
+ * they remain independent. Same single-turn-dispatch heuristic as the
+ * existing reviewer fan-out rule.
+ */
+function checkWorkerFanout(toolInput, forgeRoot) {
+  if (!toolInput) return null;
+  const subagentType = String(toolInput.subagent_type || "");
+  const desc = String(toolInput.description || "");
+  const prompt = String(toolInput.prompt || "");
+
+  // Heuristic: this is an implementer-worker dispatch if subagent_type or
+  // prompt names "implementer-worker", or the prompt asks the worker to
+  // stage output under green/candidates/worker-K/.
+  const isWorker =
+    subagentType.includes("implementer-worker") ||
+    /\bimplementer-worker\b/i.test(desc) ||
+    /candidates\/worker-\d+\b/.test(prompt);
+  if (!isWorker) return null;
+
+  if (!forgeRoot) {
+    const possibleForge = resolve(process.cwd(), ".forge");
+    if (!existsSync(possibleForge)) return null;
+    forgeRoot = possibleForge;
+  }
+
+  const state = readState(forgeRoot);
+  if (!state) return null;
+  if ((state.phase || "") !== "green") return null;
+
+  const cycleN = state.current_cycle || state.currentCycle || 1;
+  const candidatesDir = resolve(
+    forgeRoot,
+    "cycles",
+    String(cycleN),
+    "green",
+    "candidates"
+  );
+  if (!existsSync(candidatesDir)) return null;
+
+  let entries = [];
+  try {
+    entries = readdirSync(candidatesDir).filter((n) => /^worker-\d+$/.test(n));
+  } catch {
+    return null;
+  }
+  if (entries.length === 0) return null;
+
+  const now = Date.now();
+  const FIVE_SEC = 5000;
+  for (const dir of entries) {
+    const p = join(candidatesDir, dir);
+    try {
+      const m = statSync(p).mtimeMs;
+      if (now - m > FIVE_SEC) {
+        return [
+          "[BLOCK] Forge Guard: serial implementer-worker dispatch detected",
+          "",
+          `Cycle ${cycleN} is in green phase and ${entries.length} worker candidate(s)`,
+          `already exist. The most recent landed >${Math.round((now - m) / 1000)}s ago.`,
+          "",
+          "Dispatching another worker now is serial, not parallel. The",
+          "coordinator must dispatch all N workers in a single assistant turn",
+          "(N parallel Agent calls in one message) so candidates are produced",
+          "independently. See spec §4.6.",
+        ].join("\n");
+      }
+    } catch { /* skip */ }
+  }
+  return null;
+}
+
+/**
  * Rule 6 (v0.2.0 §8 rule 6): Specialist routing.
  *
  * When `agent-config.md` is present in the forge root, enforce two layers of
@@ -798,11 +874,13 @@ async function main() {
       violations.push(checkPostCycleFreeze(filePath, forgeRoot));
     }
 
-    // v2 rule 3 — parallel reviewer fan-out (Task tool dispatching subagent)
+    // v2 rule 3 — parallel reviewer fan-out
     // v0.2.0 rule 6 — specialist routing per agent-config.md
+    // v0.2.0 rule 7 — parallel implementer-worker fan-out
     if (toolName === "Task" || toolName === "Agent") {
       violations.push(checkParallelReviewerFanout(toolInput, forgeRoot));
       violations.push(checkSpecialistRouting(toolInput, forgeRoot));
+      violations.push(checkWorkerFanout(toolInput, forgeRoot));
     }
 
     const real = violations.filter(Boolean);

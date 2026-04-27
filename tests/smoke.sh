@@ -216,6 +216,41 @@ assert "missing-frontmatter agent-config rejects" "$?" "1"
 rm -rf "$BAD_AC_DIR"
 echo ""
 
+# --- best-of-N fixture (P5 / v0.2.0) ---
+echo "Section 8.5: best-of-N fixture"
+BON="${FIXTURES}/cycle-good-with-best-of-n"
+
+# Cycle artifacts validate (contract.md, tests.json)
+bash "${SCRIPTS}/cycle-validate.sh" "${BON}/contract.md" >/dev/null 2>&1
+assert "best-of-N contract.md validates"     "$?" "0"
+bash "${SCRIPTS}/cycle-validate.sh" "${BON}/tests.json" >/dev/null 2>&1
+assert "best-of-N tests.json validates"      "$?" "0"
+
+# All six worker manifests exist
+worker_count=$(find "${BON}/green/candidates" -mindepth 1 -maxdepth 1 -type d -name 'worker-*' | wc -l | tr -d ' ')
+[[ "$worker_count" == "6" ]]
+assert "best-of-N has 6 worker dirs"         "$?" "0"
+
+manifest_count=$(find "${BON}/green/candidates" -name manifest.json | wc -l | tr -d ' ')
+[[ "$manifest_count" == "6" ]]
+assert "best-of-N has 6 manifests"           "$?" "0"
+
+# Synthesis notes mention the chosen worker
+grep -q '^worker-4' "${BON}/green/synthesis-notes.md"
+assert "synthesis-notes names a winner"      "$?" "0"
+
+# Coordinator pick metric: chosen worker's manifest claims tests_pass=true
+chosen_pass=$(jq -r '.tests_pass' "${BON}/green/candidates/worker-4/manifest.json")
+[[ "$chosen_pass" == "true" ]]
+assert "chosen worker passes tests"          "$?" "0"
+
+# Coordinator pick metric: chosen worker has the lowest LOC among passers
+chosen_loc=$(jq -r '.lines_changed' "${BON}/green/candidates/worker-4/manifest.json")
+min_loc=$(for K in 1 3 4 5; do jq -r '.lines_changed' "${BON}/green/candidates/worker-${K}/manifest.json"; done | sort -n | head -1)
+[[ "$chosen_loc" == "$min_loc" ]]
+assert "chosen worker has min LOC of passers" "$?" "0"
+echo ""
+
 # --- forge-guard rule 6: specialist routing (P3 / v0.2.0) ---
 echo "Section 9: forge-guard rule 6 (specialist routing)"
 HOOK="${PLUGIN_ROOT}/hooks/forge-guard.mjs"
@@ -240,6 +275,44 @@ echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","promp
 assert "greenfield routing skips"            "$?" "0"
 
 rm -rf "$GUARD_TEST_DIR"
+echo ""
+
+# --- forge-guard rule 7: implementer-worker fan-out (P5 / v0.2.0) ---
+echo "Section 10: forge-guard rule 7 (worker fan-out)"
+W7="$(mktemp -d)"
+mkdir -p "${W7}/.forge/cycles/1/green/candidates/worker-1"
+cat > "${W7}/.forge/state.json" << 'JSON'
+{ "phase": "green", "current_cycle": 1, "iteration": 0 }
+JSON
+
+# Worker-1 candidate dir already exists with old mtime — second worker dispatch should block
+touch -t 200001010000 "${W7}/.forge/cycles/1/green/candidates/worker-1"
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-implementer-worker","prompt":"stage your candidate at green/candidates/worker-2","description":"impl worker"}}' \
+  | (cd "${W7}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "rule 7 blocks serial worker dispatch" "$?" "2"
+
+# Fresh candidate dir (just created) — should NOT block
+W7B="$(mktemp -d)"
+mkdir -p "${W7B}/.forge/cycles/1/green/candidates/worker-1"
+cat > "${W7B}/.forge/state.json" << 'JSON'
+{ "phase": "green", "current_cycle": 1, "iteration": 0 }
+JSON
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-implementer-worker","prompt":"stage your candidate at green/candidates/worker-2","description":"impl worker"}}' \
+  | (cd "${W7B}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "rule 7 allows in-turn worker dispatch" "$?" "0"
+
+# Not in green phase — rule 7 should not apply even with old worker dir
+W7C="$(mktemp -d)"
+mkdir -p "${W7C}/.forge/cycles/1/green/candidates/worker-1"
+touch -t 200001010000 "${W7C}/.forge/cycles/1/green/candidates/worker-1"
+cat > "${W7C}/.forge/state.json" << 'JSON'
+{ "phase": "test-list", "current_cycle": 1, "iteration": 0 }
+JSON
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-implementer-worker","prompt":"hi","description":"impl worker"}}' \
+  | (cd "${W7C}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "rule 7 skips outside green phase"     "$?" "0"
+
+rm -rf "$W7" "$W7B" "$W7C"
 echo ""
 
 # --- Cleanup transient outputs ---
