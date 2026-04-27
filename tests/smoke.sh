@@ -152,6 +152,54 @@ echo "$OUT" | grep -q "Forge Status"
 assert "forge-status emits header"        "$?" "0"
 echo ""
 
+# --- pre-cycle artifact validators (P2/P4 / v0.2.0) ---
+echo "Section 7.5: pre-cycle validators"
+PC_DIR=$(mktemp -d)
+
+# Empty plan.md → reject
+: > "${PC_DIR}/plan.md"
+bash "${SCRIPTS}/cycle-validate.sh" "${PC_DIR}/plan.md" >/dev/null 2>&1
+assert "empty plan.md rejects"               "$?" "1"
+
+# Non-empty plan.md → accept
+echo -e "# Plan\n\nDoes things." > "${PC_DIR}/plan.md"
+bash "${SCRIPTS}/cycle-validate.sh" "${PC_DIR}/plan.md" >/dev/null 2>&1
+assert "non-empty plan.md validates"         "$?" "0"
+
+# Spec without ## E2E Tests → reject
+cat > "${PC_DIR}/spec.md" << 'SPECMD'
+# Project Spec
+
+## Vision
+Do things.
+
+## Core Features
+- A thing.
+
+## Architecture Overview
+Use code.
+SPECMD
+bash "${SCRIPTS}/cycle-validate.sh" "${PC_DIR}/spec.md" >/dev/null 2>&1
+assert "spec without E2E Tests rejects"      "$?" "1"
+
+# Spec with ## E2E Tests → accept
+echo -e "\n## E2E Tests\n- E-001: thing happens" >> "${PC_DIR}/spec.md"
+bash "${SCRIPTS}/cycle-validate.sh" "${PC_DIR}/spec.md" >/dev/null 2>&1
+assert "spec with E2E Tests validates"       "$?" "0"
+
+# cycle-plan.md without any '## Cycle' heading → reject
+echo "# Cycle Plan" > "${PC_DIR}/cycle-plan.md"
+bash "${SCRIPTS}/cycle-validate.sh" "${PC_DIR}/cycle-plan.md" >/dev/null 2>&1
+assert "cycle-plan without Cycle heading rejects" "$?" "1"
+
+# cycle-plan.md with cycles → accept
+echo -e "\n## Cycle 1 — bootstrap\n- Goal: do something" >> "${PC_DIR}/cycle-plan.md"
+bash "${SCRIPTS}/cycle-validate.sh" "${PC_DIR}/cycle-plan.md" >/dev/null 2>&1
+assert "cycle-plan with Cycle heading validates"  "$?" "0"
+
+rm -rf "${PC_DIR}"
+echo ""
+
 # --- agent-config.md schema (P3 / v0.2.0) ---
 echo "Section 8: agent-config.md schema"
 bash "${SCRIPTS}/cycle-validate.sh" "${FIXTURES}/cycle-good/agent-config.md" >/dev/null 2>&1
