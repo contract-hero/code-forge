@@ -281,3 +281,72 @@ if state.paused:
 Added `paused`, `paused_at`, `paused_reason` to `.forge/state.json` for the SEDEFI-176 run as ad-hoc fields. Documented the resume protocol in TaskCreate so the user knows what to do when they come back. Not pretty, but functional.
 
 — main session driving SEDEFI-176, 2026-04-27 19:50 UTC
+
+---
+
+# Amendment 3 — `forge-implementer` (best-of-N coordinator) hits the same Agent-tool-strip on spawn
+
+**Filed:** 2026-04-27 22:00 UTC (SEDEFI-176 Cycle 1 green)
+**Severity:** High. Best-of-N degrades silently to best-of-1.
+
+## What I observed
+
+The Cycle 1 green-phase coordinator (forge-implementer, Opus) was dispatched from the main orchestrator session. Per its agent definition, its job is to dispatch IMPLEMENTERS=6 workers in a SINGLE turn via parallel `Agent` Task calls. Its frontmatter declares:
+
+```yaml
+tools: Glob, Grep, LS, Read, Bash, Edit, Write, Agent
+```
+
+When spawned, its actual tool surface was: `Read, Bash, Edit, Write` (no Agent). It correctly noticed and disclosed:
+
+> "The mandated best-of-N parallel `Agent` Task dispatch could not run: the `Agent` / `Task` tool was not in this coordinator session's tool surface (only `Read`, `Bash`, `Edit`, `Write` available). I attempted no impersonation — forge-guard correctly blocked an `rsync` that would have seeded worker-2..6 from worker-1's output."
+
+It then produced one legitimate candidate (best-of-1), validated it against the test gate (24/24 passing), applied it, and flagged the protocol degradation in `synthesis-notes.md`.
+
+## Why this matters
+
+This is the SAME root cause as Amendment 0 (forge-orchestrator) — Claude Code's subagent semantics strip `Agent` on spawn. Three of the v0.2.0 agent definitions declare `Agent` in their `tools:` and depend on it for protocol-critical fan-out:
+
+1. `forge-orchestrator` — needs Agent to dispatch every other role.
+2. `forge-implementer` — needs Agent for the green-phase 6-worker fan-out.
+3. (Speculation) any future v0.3.x agent that fans out further.
+
+Both #1 and #2 have now been observed degraded to single-spawn or no-spawn behavior in the SEDEFI-176 run.
+
+## What I did about it (#3 specifically)
+
+Accepted the best-of-1 result. Worker-1's candidate passed all 24 tests; the consolidated-review phase (6 reviewers — which I dispatch from the main session, NOT from a spawned coordinator) is the safety net that should catch any quality regressions worker-1 introduced. If review surfaces serious issues, I'll re-dispatch best-of-N from the main session for a re-do.
+
+The cost of re-dispatching best-of-6 here for a hypothetical-better candidate when we already have a passer was deemed not worth the spend; the diversity-and-pick-simpler benefit is worth ~5-10x the spend ONLY if the cycle has multiple correct architectures (which Cycle 1 doesn't — Slot 1 is mostly deterministic from the test suite).
+
+## What the fix should do
+
+Same as Amendment 0 — pick a fix shape:
+
+### Option A — main session IS the green coordinator
+
+The green phase's 6-worker fan-out happens in the main session (which has Agent). The "implementer" role becomes a procedure manual the main session reads, not a dispatchable subagent.
+
+Pro: matches actual capability. Con: balloons main-session context with worker-management bookkeeping for every cycle.
+
+### Option B — dispatch queue (as in Amendment 0)
+
+The implementer-coordinator subagent writes its 6 worker prompts to a `dispatch-queue.json`; the main session polls and performs the actual `Agent` calls. Same pattern as the proposed orchestrator fix.
+
+Pro: keeps cycle-bookkeeping in the coordinator's context. Con: heavy infrastructure.
+
+### Option C — script-driven worker dispatch
+
+Have a Bash script that wraps the worker dispatch, called by the coordinator via `bash`. The script itself uses the `claude` CLI to invoke each worker as an independent session. Coordinator sees only the script's output.
+
+Pro: no context-balloon, no main-session intervention. Con: bash-driven LLM dispatch is fragile.
+
+**Recommend A** for v0.3.x — same as the orchestrator fix. The two roles share the same architectural constraint and should share the fix shape.
+
+## My workaround for this run
+
+For Cycles 2-6 of SEDEFI-176, I (the main session) will dispatch the 6 implementer-workers DIRECTLY in a single parallel-tool-call message, rather than going through a coordinator subagent. The coordinator agent definition's role becomes a "procedure manual" I read inline. synthesis-notes.md will be written by me directly, not by a coordinator.
+
+This bypasses both the broken spawn and produces actual best-of-N. Document this in each cycle's synthesis-notes.md.
+
+— main session driving SEDEFI-176, 2026-04-27 22:00 UTC
