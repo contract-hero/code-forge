@@ -449,16 +449,14 @@ function checkTestFileEditDuringGreen(filePath, forgeRoot) {
  */
 function checkParallelReviewerFanout(toolInput, forgeRoot) {
   if (!toolInput) return null;
-  const subagentType = toolInput.subagent_type || "";
-  const desc = toolInput.description || "";
-  const prompt = toolInput.prompt || "";
+  const subagentType = String(toolInput.subagent_type || "");
 
-  // Heuristic: this is a reviewer dispatch if subagent_type or
-  // description/prompt mentions "reviewer" + "dimension" / "subagent-".
-  const isReviewer =
-    subagentType.includes("reviewer") ||
-    /reviewer.*\bdimension\b/i.test(desc) ||
-    /subagent-\d+\.json/.test(prompt);
+  // Anchor to the reviewer subagent_type. The consolidator's prompt
+  // legitimately references subagent-N.json paths (its job is to read
+  // reviewer outputs), so prompt-text heuristics false-positive on it. Match
+  // only when subagent_type ends in "forge-reviewer" or "reviewer" — never
+  // when it ends in "forge-consolidator".
+  const isReviewer = /(?:^|[:\/])(?:forge-)?reviewer$/.test(subagentType);
   if (!isReviewer) return null;
 
   if (!forgeRoot) {
@@ -523,16 +521,12 @@ function checkParallelReviewerFanout(toolInput, forgeRoot) {
 function checkWorkerFanout(toolInput, forgeRoot) {
   if (!toolInput) return null;
   const subagentType = String(toolInput.subagent_type || "");
-  const desc = String(toolInput.description || "");
-  const prompt = String(toolInput.prompt || "");
 
-  // Heuristic: this is an implementer-worker dispatch if subagent_type or
-  // prompt names "implementer-worker", or the prompt asks the worker to
-  // stage output under green/candidates/worker-K/.
-  const isWorker =
-    subagentType.includes("implementer-worker") ||
-    /\bimplementer-worker\b/i.test(desc) ||
-    /candidates\/worker-\d+\b/.test(prompt);
+  // Anchor to the implementer-worker subagent_type. The implementer
+  // coordinator's prompt legitimately references candidates/worker-K/ (it
+  // reads each candidate's manifest), so prompt-text heuristics false-
+  // positive on the coordinator. Match only the worker subagent_type.
+  const isWorker = /(?:^|[:\/])(?:forge-)?implementer-worker$/.test(subagentType);
   if (!isWorker) return null;
 
   if (!forgeRoot) {
