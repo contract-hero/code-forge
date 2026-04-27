@@ -33,16 +33,16 @@ assert() {
 }
 
 # Stand up a temp dir with a green-phase .forge/ scaffolding for hook tests.
-# realpath the temp dir: on macOS mktemp returns /var/... but cwd resolves
-# the /var → /private/var symlink, breaking the hook's string-prefix path
-# comparison. Canonicalize once here.
+# F11 made the hook itself realpath-aware, so we no longer need to canonicalize
+# the temp dir up-front. Returning the raw mktemp path lets the F11 assertion
+# exercise the symlink-crossing case for real.
 # Args: $1 test_file path; $2 optional target_file (default src/foo.ts).
 # Echoes the temp dir path; caller is responsible for `rm -rf` cleanup.
 setup_green_phase_fixture() {
   local test_file="$1"
   local target_file="${2:-src/foo.ts}"
   local dir
-  dir=$(cd "$(mktemp -d)" && pwd -P)
+  dir=$(mktemp -d)
   mkdir -p "${dir}/.forge/cycles/1"
   cat > "${dir}/.forge/state.json" << 'JSON'
 { "phase": "green", "current_cycle": 1, "iteration": 0 }
@@ -438,6 +438,27 @@ bash "${SCRIPTS}/cycle-validate.sh" "${F1_DIR}/.forge/cycles/1/tests.json" >/dev
 assert "F1: tests.json without test_file rejects" "$?" "1"
 
 rm -rf "$F1_DIR"
+echo ""
+
+# --- F11: realpath in makeRepoRelative (macOS /var → /private/var) ---
+# setup_green_phase_fixture now returns the raw mktemp path. On macOS that's
+# typically /var/folders/... whose canonical form is /private/var/folders/...
+# Pre-F11, the hook's string-prefix compare missed the match because cwd
+# resolved the symlink but file_path didn't. Post-F11, makeRepoRelative
+# realpaths both sides — this assertion proves the block fires correctly even
+# with a symlink-crossing path.
+echo "Section 11.6: F11 — realpath path normalization"
+F11_DIR=$(setup_green_phase_fixture "tests/foo.test.ts")
+# Sanity: confirm we're actually exercising the symlink case on macOS.
+F11_REAL=$(cd "$F11_DIR" && pwd -P)
+if [[ "$F11_DIR" == "$F11_REAL" ]]; then
+  echo "  SKIP: F11 case (no symlink in temp-dir path; nothing to exercise here)"
+else
+  echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${F11_DIR}/tests/foo.test.ts\"}}" \
+    | (cd "${F11_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+  assert "F11: hook blocks across /var symlink"  "$?" "2"
+fi
+rm -rf "$F11_DIR"
 echo ""
 
 # --- e2e-extract.sh + cycle-e2e-pass.sh + scenarios.json schema (P6 / v0.2.0) ---

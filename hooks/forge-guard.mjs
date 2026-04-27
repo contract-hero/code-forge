@@ -33,7 +33,7 @@
  * YAML frontmatter (v1/rig) when state.json is absent, for transitional repos.
  */
 
-import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, statSync, readdirSync, realpathSync } from "node:fs";
 import { resolve, dirname, basename, join } from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -133,13 +133,45 @@ function isForgeArtifact(filePath) {
   return filePath && filePath.includes(".forge/");
 }
 
+// Realpath the longest-existing-ancestor prefix of `p`, then re-attach the
+// missing trailing segments. Lets us canonicalize a path that names a planned
+// write (file doesn't exist; intermediate dirs may also not exist), as long as
+// at least one ancestor is on disk. When no ancestor exists, returns `p`
+// unchanged.
+function realpathLongestPrefix(p) {
+  let cur = p;
+  const tail = [];
+  // Stop walking at the filesystem root or empty.
+  while (cur && cur !== "/" && cur !== ".") {
+    try {
+      return tail.length === 0
+        ? realpathSync(cur)
+        : resolve(realpathSync(cur), ...tail);
+    } catch {
+      tail.unshift(basename(cur));
+      cur = dirname(cur);
+    }
+  }
+  return p;
+}
+
 // Strip the absolute repoRoot prefix from filePath. If filePath is not under
 // repoRoot, returns it unchanged. Used by phase-aware path checks that need
 // repo-relative comparison against tests.json / contract.md entries.
+//
+// Both sides go through realpathLongestPrefix() first: on macOS, process.cwd()
+// resolves through the /var → /private/var symlink, but the supplied filePath
+// usually doesn't, so a naive string-prefix compare misses every match when
+// the worktree path crosses a symlink (typical under mktemp). filePath is
+// often a planned write that doesn't exist yet, plus its intermediate dirs
+// may also be missing in synthetic test setups — the longest-prefix walk
+// handles both cases.
 function makeRepoRelative(filePath, repoRoot) {
-  return filePath.startsWith(repoRoot + "/")
-    ? filePath.slice(repoRoot.length + 1)
-    : filePath;
+  const realRoot = realpathLongestPrefix(repoRoot);
+  const realFile = realpathLongestPrefix(filePath);
+  return realFile.startsWith(realRoot + "/")
+    ? realFile.slice(realRoot.length + 1)
+    : realFile;
 }
 
 // Best-of-N workers stage candidate implementations under
