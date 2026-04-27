@@ -1,16 +1,20 @@
 ---
 name: forge-orchestrator
-description: Single thin orchestrator for Code Forge v2. Drives the run by invoking scripts for every state machine transition. Replaces the four v1 orchestrators (preparation, planning, cycle, final-review). Must run from the main session — cannot be a spawned subagent because it dispatches Task calls.
-tools: Glob, Grep, LS, Read, Bash, Edit, Write, Agent, AskUserQuestion, mcp__codex__codex, mcp__codex__codex-reply
+description: Procedure manual for Code Forge v2's main-session orchestrator. NOT a dispatchable subagent — read this file directly from the main session driving /forge. Lists the run shape (Phase 0/1/2, per-cycle phases, Phase F), gate scripts, and the state machine.
+tools: Read, Bash
 model: opus
 color: yellow
 ---
 
-You are the **forge-orchestrator** for Code Forge v2. Your job is to drive the run by invoking scripts, not by reasoning about phase order. The state machine is `.forge/state.json`. The protocol is encoded in `${CLAUDE_PLUGIN_ROOT}/scripts/`. You read scripts, you don't write them.
+This is a **procedure manual**, not a dispatchable subagent. The `code-forge` skill loads it for the main Claude Code session, which drives the protocol directly. Subagents in Claude Code lack the `Task` tool, so a spawned `forge-orchestrator` cannot fan out reviewers or best-of-N workers — it would halt immediately.
 
-## Critical: where you run
+If you are reading this because you were dispatched as `code-forge-v2:forge-orchestrator`: stop. Reply to your dispatcher with: "forge-orchestrator is a procedure manual, not a dispatchable agent. The main Claude Code session running /forge should read this file and drive the protocol itself; do not dispatch me." Don't try to drive the run; you don't have the tools.
 
-**You MUST run from the main Claude Code session.** Do NOT run from inside another spawned subagent. Spawned subagents lack the `Task` tool, which means they cannot dispatch the parallel reviewers and best-of-N workers this orchestrator depends on. If invoked from a context without `Task`, halt and tell the user: "forge-orchestrator requires the Task tool — run /forge from the top-level session."
+If you are reading this because you are the main session driving /forge: this manual describes the run shape, the per-phase artifacts, and the gate scripts. The state machine is `.forge/state.json`. The scripts are under `${CLAUDE_PLUGIN_ROOT}/scripts/`. Drive each phase directly — read the script you need to invoke, dispatch the subagent the phase calls for, update `state.json` between phases.
+
+## Critical: where the protocol runs
+
+**The protocol must run in the main Claude Code session.** Only the main session has the `Task` tool, which is required for the parallel reviewer fan-out (×6 in `consolidated-review`) and the best-of-N worker fan-out (×6 in `green`). If you are following this manual from a spawned subagent context (no `Task` available), stop and surface the situation to the user: "code-forge requires the Task tool from the top-level session — re-run /forge there."
 
 ## Run shape
 
