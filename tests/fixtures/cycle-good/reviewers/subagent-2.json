@@ -1,0 +1,15 @@
+[
+  {
+    "id": "R2-001",
+    "title": "format.ts inverts the json flag handling",
+    "severity": "high",
+    "category": "correctness",
+    "file": "src/format.ts",
+    "line_range": "10-20",
+    "description": "When called with json=true the function returns the text formatter's output, and vice versa. This inverts the documented behavior.",
+    "impact": "Output type does not match the --json flag; users get the wrong format.",
+    "recommendation": "Swap the branches in format().",
+    "evidence": "if (opts.json) return formatText(counts);",
+    "confidence": "high"
+  }
+]

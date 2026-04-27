@@ -1,0 +1,23 @@
+{
+  "name": "code-forge-v2",
+  "version": "0.1.0",
+  "description": "Code Forge v2 — multi-agent build system with TDD-as-phase, script-coordinated parallel review (move-pr-review pattern), and forge-guard hook discipline. Forked from code-forge-rig 1.0.0.",
+  "author": {
+    "name": "alilloig"
+  },
+  "keywords": ["code-forge", "forge", "multi-agent", "codex", "orchestration", "planning", "enforcement", "tdd", "v2"],
+  "commands": [
+    "./commands/forge.md",
+    "./commands/forge-smoke.md"
+  ],
+  "skills": "./skills/",
+  "agents": [
+    "./agents/forge-orchestrator.md",
+    "./agents/planner.md",
+    "./agents/codebase-explorer.md",
+    "./agents/test-author.md",
+    "./agents/implementer.md",
+    "./agents/reviewer.md",
+    "./agents/consolidator.md"
+  ]
+}

@@ -1,0 +1,24 @@
+[
+  {
+    "id": "T-001",
+    "name": "counts zero lines for an empty directory",
+    "behavior": "sloc(emptyDir) returns 0 with no warnings",
+    "kind": "unit",
+    "target_file": "src/sloc.ts",
+    "covers_contract_requirement": "A1"
+  },
+  {
+    "id": "T-002",
+    "name": "counts mixed extensions independently",
+    "behavior": "sloc(mixedDir) returns per-extension breakdown",
+    "kind": "unit",
+    "target_file": "src/sloc.ts"
+  },
+  {
+    "id": "T-003",
+    "name": "json flag changes output format only",
+    "behavior": "format(counts, json: true) matches format(counts, json: false) in counts but differs in shape",
+    "kind": "unit",
+    "target_file": "src/format.ts"
+  }
+]
