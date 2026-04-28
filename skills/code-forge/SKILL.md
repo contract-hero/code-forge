@@ -39,6 +39,8 @@ Both define halt-stubs at the top that fire if anything tries to dispatch them a
 
 **Dispatchable subagents** (from this session): `forge-planner`, `forge-test-author`, `forge-implementer-worker`, `forge-reviewer`, `forge-consolidator`, `forge-codebase-explorer`. That's how the parallel fan-out works.
 
+When you call the `Agent` tool, `subagent_type` is always the plugin-namespaced form: `code-forge:forge-planner`, `code-forge:forge-implementer-worker`, etc. The bold role names elsewhere in this skill (e.g. **planner**, **test-author**) are prose shorthand — never pass the bare name (e.g. `code-forge:planner`) as `subagent_type`. See `agents/forge-orchestrator.md`'s dispatch reference table for the canonical mapping.
+
 **Lazy prompt:** $ARGUMENTS
 
 ## Critical: where this skill must run

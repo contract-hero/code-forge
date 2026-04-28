@@ -24,6 +24,21 @@ per cycle:  contract → test-list → red → green → consolidated-review   (
 post-cycle: Phase F (e2e-review)   [if spec.md has ## E2E Tests; cap = 3 remediation cycles]
 ```
 
+## Subagent dispatch reference
+
+When this manual says "dispatch the **planner**", the literal `subagent_type` you pass to the `Agent` tool is the `forge-`-prefixed name below — never the bare role name. Bold role names are prose shorthand, not dispatch values.
+
+| Role | `subagent_type` |
+|---|---|
+| planner | `code-forge:forge-planner` |
+| test-author | `code-forge:forge-test-author` |
+| implementer-worker (×N in green) | `code-forge:forge-implementer-worker` |
+| reviewer (×N in consolidated-review and Phase F) | `code-forge:forge-reviewer` |
+| consolidator | `code-forge:forge-consolidator` |
+| codebase-explorer (extension prompts only) | `code-forge:forge-codebase-explorer` |
+
+Specialist routing (forge-guard rule 6) overrides these for source-touching roles when `agent-config.md` declares a sui-ecosystem `project_domain` — see `agents/implementer.md` Routing.
+
 The pre-cycle is compressed from v1's 7 phases (intent, exploration, prompt-refinement, agent-detection, specification, spec-critique, cycle-planning) into 3. Codex G1 lives inside Phase 0's claudex flow; G2.a and G2.b are explicit gates inside Phase 1; G2.5 gates the cycle plan exit.
 
 ## Pre-cycle phases
@@ -109,7 +124,7 @@ Update `.forge/state.json`: `phase = "green"`. forge-guard now blocks test-file 
 
 Dispatch **implementer** (Opus coordinator). The coordinator:
 
-1. Dispatches `IMPLEMENTERS` workers (env, default 6) in a SINGLE turn via N parallel `Agent` Task calls with `subagent_type: "code-forge:implementer-worker"` and `run_in_background: true`. Each worker reads `contract.md` + `tests.json` independently and emits its candidate to `cycles/N/green/candidates/worker-K/`.
+1. Dispatches `IMPLEMENTERS` workers (env, default 6) in a SINGLE turn via N parallel `Agent` Task calls with `subagent_type: "code-forge:forge-implementer-worker"` and `run_in_background: true`. Each worker reads `contract.md` + `tests.json` independently and emits its candidate to `cycles/N/green/candidates/worker-K/`.
 2. After all workers complete, runs `cycle-tests-pass.sh green` against each candidate; keeps passers.
 3. Picks the simplest passer (fewest LOC across `target_file`s, then fewest files).
 4. Applies the chosen candidate to the repo; writes `cycles/N/green/synthesis-notes.md` documenting the choice + diversity signal (low-diversity warning if all 6 converge on the same wrong answer).
