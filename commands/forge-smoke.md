@@ -1,11 +1,11 @@
 ---
-description: "Run code-forge-v2's self-test against fixtures. Validates that all orchestration scripts behave correctly on known-good and known-bad inputs."
+description: "Run code-forge's self-test against fixtures. Validates that all orchestration scripts behave correctly on known-good and known-bad inputs."
 argument-hint: "(no arguments)"
 ---
 
 # Forge Smoke
 
-Run `tests/smoke.sh` — the v2 plugin's self-test. Use this before pushing changes; CI runs the same script at the merge boundary.
+Run `tests/smoke.sh` — the plugin's self-test. Use this before pushing changes; CI runs the same script at the merge boundary.
 
 ## Instructions
 

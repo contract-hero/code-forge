@@ -1,6 +1,6 @@
 ---
 name: forge-implementer
-description: Procedure manual for Code Forge v2's green-phase coordinator. NOT a dispatchable subagent — the main session driving /forge reads this file directly when running each cycle's green (best-of-N) phase. Lists the 5-step protocol, scoring rubric, and synthesis-notes shape. Mirrors the F6 pattern that made forge-orchestrator a procedure manual.
+description: Procedure manual for Code Forge's green-phase coordinator. NOT a dispatchable subagent — the main session driving /forge reads this file directly when running each cycle's green (best-of-N) phase. Lists the 5-step protocol, scoring rubric, and synthesis-notes shape. Mirrors the F6 pattern that made forge-orchestrator a procedure manual.
 tools: Read, Bash
 model: opus
 color: blue
@@ -8,7 +8,7 @@ color: blue
 
 This is a **procedure manual**, not a dispatchable subagent. The main Claude Code session driving `/forge` reads this file when running each cycle's green phase. Subagents in Claude Code lack the `Agent`/`Task` tool, so a spawned `forge-implementer` cannot fan out the 6 workers — it would degrade to best-of-1 silently. Same architectural class as F6's fix for `forge-orchestrator` (see `agents/forge-orchestrator.md`).
 
-If you are reading this because you were dispatched as `code-forge-v2:forge-implementer`: stop. Reply to your dispatcher with: "forge-implementer is a procedure manual, not a dispatchable agent. The main Claude Code session running /forge should read this file and drive the green phase itself; do not dispatch me." Don't try to drive the green phase; you don't have `Agent`.
+If you are reading this because you were dispatched as `code-forge:forge-implementer`: stop. Reply to your dispatcher with: "forge-implementer is a procedure manual, not a dispatchable agent. The main Claude Code session running /forge should read this file and drive the green phase itself; do not dispatch me." Don't try to drive the green phase; you don't have `Agent`.
 
 If you are reading this because you are the main session driving /forge's per-cycle green phase: this manual describes the 5-step best-of-N protocol. Dispatch the workers yourself; you have `Agent`.
 
@@ -31,7 +31,7 @@ forge-guard rule 5/8 blocks any Edit/Write to a path listed in `cycles/N/tests.j
 ### Step 1 — Dispatch N workers in a SINGLE assistant turn
 
 In ONE message, issue N parallel `Agent` Task calls with:
-- `subagent_type: "code-forge-v2:forge-implementer-worker"` (or whatever specialist `agent-config.md` mandates — forge-guard rule 6 will block mismatches; see Routing below)
+- `subagent_type: "code-forge:forge-implementer-worker"` (or whatever specialist `agent-config.md` mandates — forge-guard rule 6 will block mismatches; see Routing below)
 - `run_in_background: true`
 - `prompt: "<role-prompt + worker number K + cycle path>"`
 
@@ -111,7 +111,7 @@ If `agent-config.md` declares a sui-ecosystem `project_domain` (e.g. `sui-dapp`)
 
 If no `project_domains`, fall back to per-glob `required_subagents`. Post-F12, the rule reads the cycle's `contract.md ## Files` to decide whether the binding fires; if a Move file is in scope and the binding requires sui-pilot, the workers must dispatch as sui-pilot.
 
-If neither domain nor glob applies, dispatch with `subagent_type: "code-forge-v2:forge-implementer-worker"`.
+If neither domain nor glob applies, dispatch with `subagent_type: "code-forge:forge-implementer-worker"`.
 
 ## What the main session does NOT do during green
 

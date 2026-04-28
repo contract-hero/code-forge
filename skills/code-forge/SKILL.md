@@ -1,7 +1,7 @@
 ---
 name: code-forge
 description: |
-  Code Forge v2 — multi-agent build system with TDD-as-phase, script-coordinated
+  Code Forge — multi-agent build system with TDD-as-phase, script-coordinated
   parallel review (move-pr-review pattern), and forge-guard hook discipline.
   Use when:
   (1) the user invokes /forge,
@@ -24,12 +24,12 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
 author: alilloig
-version: 0.2.0
+version: 0.1.0
 ---
 
-# Code Forge v2 — Cycle Protocol
+# Code Forge — Cycle Protocol
 
-**You are the orchestrator of Code Forge v2.** This skill loaded into your main session; from now until `phase: done`, you drive the cycle yourself — dispatching planner/test-author/reviewer/consolidator/codebase-explorer subagents as the protocol requires, **dispatching the 6 implementer-workers directly during each cycle's green phase** (the implementer-coordinator's role is now bookkeeping you do inline, per F8 in v0.4.x), updating `.forge/state.json` between phases, and invoking gate scripts under `${CLAUDE_PLUGIN_ROOT}/scripts/`.
+**You are the orchestrator of Code Forge.** This skill loaded into your main session; from now until `phase: done`, you drive the cycle yourself — dispatching planner/test-author/reviewer/consolidator/codebase-explorer subagents as the protocol requires, **dispatching the 6 implementer-workers directly during each cycle's green phase** (the implementer-coordinator's role is now bookkeeping you do inline, per F8 in v0.4.x), updating `.forge/state.json` between phases, and invoking gate scripts under `${CLAUDE_PLUGIN_ROOT}/scripts/`.
 
 **Procedure manuals** (read inline; do NOT dispatch as subagents):
 - `agents/forge-orchestrator.md` — overall run shape (Phase 0/1/2 + per-cycle phases + Phase F).
@@ -118,7 +118,7 @@ All scripts in `${CLAUDE_PLUGIN_ROOT}/scripts/`:
 | `e2e-extract.sh <spec.md> <out-scenarios.json>` | Parse `## E2E Tests` from spec.md into `scenarios.json` for Phase F. |
 | `cycle-e2e-pass.sh <e2e-dir>` | Read `e2e/_consolidated.json` + `e2e/scenarios.json`; exit 0 iff no critical AND every scenario has at least one passing reviewer touch. The ship gate. |
 | `forge-status.sh [<forge-dir>]` | Human-readable progress dashboard. User can run anytime. |
-| `deploy.sh [--dry-run\|--check]` | Sync the repo's plugin tree to `~/.claude/plugins/code-forge-v2/`. Run after committing changes. |
+| `deploy.sh [--dry-run\|--check]` | Sync the repo's plugin tree to `~/.claude/plugins/code-forge/`. Run after committing changes. |
 
 The skill file does NOT paraphrase what these scripts do. The scripts are the protocol.
 
@@ -148,7 +148,7 @@ If you see `[BLOCK] Forge Guard:` the tool call has been rejected — fix the un
 
 ## Smoke-testing the plugin itself
 
-`/forge-smoke` runs `tests/smoke.sh` — the v2 plugin's self-test against fixtures under `tests/fixtures/`. CI also runs it on every push (see `.github/workflows/forge-smoke.yml` in the dotfiles repo). Run before pushing changes; CI catches breakage at merge boundary.
+`/forge-smoke` runs `tests/smoke.sh` — the plugin's self-test against fixtures under `tests/fixtures/`. CI also runs it on every push (see `.github/workflows/forge-smoke.yml` in the dotfiles repo). Run before pushing changes; CI catches breakage at merge boundary.
 
 ## Resume / status
 
@@ -170,6 +170,6 @@ After parsing flags from `$ARGUMENTS`:
 4. Update `.forge/state.json` before every phase transition. forge-guard reads it for invariant checking.
 5. When state.json reports `phase: "done"`, surface the final review path(s) to the user.
 
-**Don't dispatch `code-forge-v2:forge-orchestrator` or `code-forge-v2:forge-implementer` as subagents.** Both halt — subagents lack `Task`/`Agent` and cannot fan out reviewers/workers. Both are procedure manuals you read inline; the dispatching happens from this session.
+**Don't dispatch `code-forge:forge-orchestrator` or `code-forge:forge-implementer` as subagents.** Both halt — subagents lack `Task`/`Agent` and cannot fan out reviewers/workers. Both are procedure manuals you read inline; the dispatching happens from this session.
 
 That's the protocol. The scripts gate the transitions; `agents/forge-orchestrator.md` carries the per-phase detail.

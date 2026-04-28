@@ -1,9 +1,11 @@
 #!/bin/bash
-# deploy.sh — sync this repo's plugin tree to ~/.claude/plugins/code-forge-v2/
+# deploy.sh — sync this repo's plugin tree to ~/.claude/plugins/code-forge/
 #
-# This worktree IS the development copy of the code-forge-v2 plugin. The live
-# install at ~/.claude/plugins/code-forge-v2/ is what Claude Code actually
-# loads. Run this script after committing changes here to update the install.
+# Note: The canonical install since v0.1.0 is the dotclaude submodule at
+# ~/.claude/code-forge/ (top-level, mirroring sui-pilot). In that workflow
+# the submodule itself is the source-of-truth, and this script is
+# unnecessary. deploy.sh is kept for legacy non-submodule installs that
+# expect the plugin under ~/.claude/plugins/code-forge/.
 #
 # Usage:
 #   bash scripts/deploy.sh           # rsync the plugin tree
@@ -12,7 +14,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-INSTALL_ROOT="${HOME}/.claude/plugins/code-forge-v2"
+INSTALL_ROOT="${HOME}/.claude/plugins/code-forge"
 
 # The set of paths that constitute the plugin (everything else in the repo —
 # spec.md, playground.html, docs/, bench/, README.md — is documentation).

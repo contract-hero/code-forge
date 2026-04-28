@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * Forge Guard v2 — Programmatic enforcement for the Code Forge v2 protocol.
+ * Forge Guard — Programmatic enforcement for the Code Forge protocol.
  *
  * Carries forward the four original rig invariants (contract-exists,
- * evaluation-passed, phase-transition, codex-gates) and adds four new v2
+ * evaluation-passed, phase-transition, codex-gates) and adds four
  * invariants targeting TDD discipline and parallel-review correctness.
  *
  * Original invariants (kept):
@@ -13,7 +13,7 @@
  *   3. Phase transitions must follow order.
  *   4. Codex gates cannot be silently skipped (unless --light).
  *
- * New v2 invariants (§8 of code-forge-v2-spec.md):
+ * Newer invariants (§8 of spec.md):
  *   5. PreToolUse(Edit) — block edits to test files during green phase
  *      (anti-weakening rule from 05-tdd.md).
  *   6. PreToolUse(Task) — block second `reviewer` Agent dispatch >5 seconds
@@ -763,7 +763,7 @@ function checkSpecialistRouting(toolInput, forgeRoot) {
   const suiDomainPresent = domains.some((d) => SUI_DOMAINS.has(d));
 
   // Roles that the project-domain rule applies to. Anchored on the role
-  // suffix (post-namespace) so it works with `code-forge-v2:forge-X` and
+  // suffix (post-namespace) so it works with `code-forge:forge-X` and
   // any future namespacing.
   const DOMAIN_FORCED_ROLES = new Set(["implementer-worker", "reviewer"]);
 
@@ -845,7 +845,7 @@ function checkSpecialistRouting(toolInput, forgeRoot) {
 }
 
 // Best-effort role inference from a Task dispatch. Order: subagent_type
-// suffix (e.g. "code-forge-v2:forge-implementer-worker" → "implementer-worker"),
+// suffix (e.g. "code-forge:forge-implementer-worker" → "implementer-worker"),
 // then a phrase in the prompt/description ("as planner", "as test-author",
 // etc.), then null. Used only to scope applies_to in routing rules.
 function inferRoleFromTaskInput(toolInput) {

@@ -1,6 +1,6 @@
-# Code Forge Rig — Enforcement-Hardened Multi-Agent Build System
+# Code Forge — Enforcement-Hardened Multi-Agent Build System
 
-> **⚠️ Doc currency.** This file describes the v1 code-forge-rig fork that v0.1.0 was based on. The v0.2.0+ shape (Phase 0/1/2 pre-cycle, best-of-N green, Phase F e2e, project_domain routing) lives in [`spec.md`](./spec.md) and [`docs/v0.2.0-build-report.md`](./docs/v0.2.0-build-report.md). This file will be rewritten in a later release.
+> **⚠️ Doc currency.** This file is **historical** — it describes the v1 `code-forge-rig` fork that the current `code-forge` plugin descended from. The current shape (Phase 0/1/2 pre-cycle, best-of-N green, Phase F e2e, project_domain routing) lives in [`spec.md`](./spec.md) and [`docs/v0.2.0-build-report.md`](./docs/v0.2.0-build-report.md). This file is preserved for design rationale; user-facing docs live in [`README.md`](./README.md) and [`skills/code-forge/SKILL.md`](./skills/code-forge/SKILL.md).
 
 ## Migrating from v0.2.0 → v0.3.x
 
@@ -94,7 +94,7 @@ The tool call is rejected (exit 2). The orchestrator must create the contract fi
 
 ## Benchmarking
 
-Use the [forge-bench](../forge-bench/) companion plugin to run head-to-head comparisons between code-forge and code-forge-rig:
+Use the [forge-bench](../forge-bench/) companion plugin to run head-to-head comparisons between code-forge and its predecessor variants:
 
 ```
 /forge-bench "Build a CLI tool in Rust" --budget 60

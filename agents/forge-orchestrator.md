@@ -1,6 +1,6 @@
 ---
 name: forge-orchestrator
-description: Procedure manual for Code Forge v2's main-session orchestrator. NOT a dispatchable subagent — read this file directly from the main session driving /forge. Lists the run shape (Phase 0/1/2, per-cycle phases, Phase F), gate scripts, and the state machine.
+description: Procedure manual for Code Forge's main-session orchestrator. NOT a dispatchable subagent — read this file directly from the main session driving /forge. Lists the run shape (Phase 0/1/2, per-cycle phases, Phase F), gate scripts, and the state machine.
 tools: Read, Bash
 model: opus
 color: yellow
@@ -8,7 +8,7 @@ color: yellow
 
 This is a **procedure manual**, not a dispatchable subagent. The `code-forge` skill loads it for the main Claude Code session, which drives the protocol directly. Subagents in Claude Code lack the `Task` tool, so a spawned `forge-orchestrator` cannot fan out reviewers or best-of-N workers — it would halt immediately.
 
-If you are reading this because you were dispatched as `code-forge-v2:forge-orchestrator`: stop. Reply to your dispatcher with: "forge-orchestrator is a procedure manual, not a dispatchable agent. The main Claude Code session running /forge should read this file and drive the protocol itself; do not dispatch me." Don't try to drive the run; you don't have the tools.
+If you are reading this because you were dispatched as `code-forge:forge-orchestrator`: stop. Reply to your dispatcher with: "forge-orchestrator is a procedure manual, not a dispatchable agent. The main Claude Code session running /forge should read this file and drive the protocol itself; do not dispatch me." Don't try to drive the run; you don't have the tools.
 
 If you are reading this because you are the main session driving /forge: this manual describes the run shape, the per-phase artifacts, and the gate scripts. The state machine is `.forge/state.json`. The scripts are under `${CLAUDE_PLUGIN_ROOT}/scripts/`. Drive each phase directly — read the script you need to invoke, dispatch the subagent the phase calls for, update `state.json` between phases.
 
@@ -109,7 +109,7 @@ Update `.forge/state.json`: `phase = "green"`. forge-guard now blocks test-file 
 
 Dispatch **implementer** (Opus coordinator). The coordinator:
 
-1. Dispatches `IMPLEMENTERS` workers (env, default 6) in a SINGLE turn via N parallel `Agent` Task calls with `subagent_type: "code-forge-v2:implementer-worker"` and `run_in_background: true`. Each worker reads `contract.md` + `tests.json` independently and emits its candidate to `cycles/N/green/candidates/worker-K/`.
+1. Dispatches `IMPLEMENTERS` workers (env, default 6) in a SINGLE turn via N parallel `Agent` Task calls with `subagent_type: "code-forge:implementer-worker"` and `run_in_background: true`. Each worker reads `contract.md` + `tests.json` independently and emits its candidate to `cycles/N/green/candidates/worker-K/`.
 2. After all workers complete, runs `cycle-tests-pass.sh green` against each candidate; keeps passers.
 3. Picks the simplest passer (fewest LOC across `target_file`s, then fewest files).
 4. Applies the chosen candidate to the repo; writes `cycles/N/green/synthesis-notes.md` documenting the choice + diversity signal (low-diversity warning if all 6 converge on the same wrong answer).

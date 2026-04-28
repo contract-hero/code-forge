@@ -1,11 +1,11 @@
 {
-  "name": "code-forge-v2",
-  "version": "0.2.0",
-  "description": "Code Forge v2 — multi-agent build system with TDD-as-phase, script-coordinated parallel review (move-pr-review pattern), and forge-guard hook discipline. v0.2.0 adds Codex-mediated Phase 0 (claudex), best-of-N implementer (Opus coordinator + N Sonnet workers), specialist routing (project_domains), and e2e tests as cross-cycle invariant (Phase F).",
+  "name": "code-forge",
+  "version": "0.1.0",
+  "description": "Code Forge — multi-agent build system with TDD-as-phase, script-coordinated parallel review (move-pr-review pattern), and forge-guard hook discipline. Codex-mediated Phase 0 (claudex), best-of-N implementer (Opus coordinator + N Sonnet workers), specialist routing (project_domains), and e2e tests as cross-cycle invariant (Phase F).",
   "author": {
     "name": "alilloig"
   },
-  "keywords": ["code-forge", "forge", "multi-agent", "codex", "orchestration", "planning", "enforcement", "tdd", "v2", "best-of-n", "e2e"],
+  "keywords": ["code-forge", "forge", "multi-agent", "codex", "orchestration", "planning", "enforcement", "tdd", "best-of-n", "e2e"],
   "commands": [
     "./commands/forge.md",
     "./commands/forge-smoke.md"

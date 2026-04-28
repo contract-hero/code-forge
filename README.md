@@ -2,7 +2,7 @@
 
 A multi-agent build system that turns lazy prompts into shippable software through structured planning, TDD-as-phase, parallel review, and hook-enforced protocol discipline.
 
-> Status: **v0.2.0 in development in this repo.** v0.1.0 baseline ported from `~/.claude/plugins/code-forge-v2/`; smoke 19/19 green. Run `bash scripts/deploy.sh` to push changes to the live install. See [`docs/implementation-summary.md`](./docs/implementation-summary.md) for v0.1.0 build report and [`spec.md`](./spec.md) §0 for v0.2.0 amendments.
+> Status: **v0.1.0 — fresh-start release of the renamed plugin (formerly `code-forge-v2`).** Smoke 19/19 green. The plugin loads from a submodule at `~/.claude/code-forge/` (mirroring the sui-pilot submodule pattern). Run `bash scripts/deploy.sh` to push working-tree changes to the live install. See [`docs/implementation-summary.md`](./docs/implementation-summary.md) and [`spec.md`](./spec.md) for design history.
 
 ## Start here: open the playground
 
@@ -30,8 +30,8 @@ If you spend 5 minutes there, you'll understand more than any README could tell 
 
 | Phase | Status | Lives at |
 |---|---|---|
-| v0.1.0 (TDD-as-phase, parallel review, gates as code, smoke tests) | **shipped, smoke 19/19 green** | this repo (plugin tree at root); deploys to `~/.claude/plugins/code-forge-v2/` |
-| v0.2.0 (claudex Phase 0, e2e-as-glue, best-of-N implementer, project-domain routing) | **in progress** | this repo, see [`spec.md`](./spec.md) §0 + §4.6–4.10 |
+| TDD-as-phase, parallel review, gates as code, smoke tests | **shipped, smoke 19/19 green** | this repo (plugin tree at root); deploys to `~/.claude/code-forge/` |
+| claudex Phase 0, e2e-as-glue, best-of-N implementer, project-domain routing | **shipped in this release** | this repo, see [`spec.md`](./spec.md) |
 
 See [`docs/implementation-summary.md`](./docs/implementation-summary.md) for what was actually built in v0.1.0 and how it was verified.
 
@@ -74,7 +74,7 @@ This repo is **both** the design home and the plugin source. The plugin tree liv
 
 ## Deploy to live install
 
-The plugin source lives here; Claude Code loads from `~/.claude/plugins/code-forge-v2/`. Sync after changes:
+The plugin source lives here; Claude Code loads from `~/.claude/code-forge/` (the dotclaude submodule pointing at this repo). Sync after changes:
 
 ```bash
 bash scripts/deploy.sh             # rsync repo → install
