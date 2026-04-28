@@ -28,6 +28,18 @@ The pre-cycle is compressed from v1's 7 phases (intent, exploration, prompt-refi
 
 ## Pre-cycle phases
 
+### Phase 0a — Resume check (F9, v0.4.x)
+
+Before any phase work, if `.forge/state.json` exists, read it and check:
+
+- If `state.paused !== true`, advance from `state.phase` as usual (skip the rest of this section).
+- If `state.paused === true`, the previous run halted on a failed decision gate (G-Boot, G-Schema, G-Pyth, G-Vault) and is waiting for user input. **Do NOT auto-advance.** Read the most recent `pause_history` entry to identify the gate and reason. Use `AskUserQuestion` to present three options:
+  - **Resume** — re-run the named gate. On success, append `resumed_at` to the pause_history entry and clear `paused` to `false` before advancing. On failure, append a new pause_history entry.
+  - **Abort** — write `state.phase = "done"` and `state.aborted = true`, write a final summary citing the unresolved gate, exit cleanly.
+  - **Restart** — wipe `.forge/` and start a fresh run from Phase 0.
+
+Pause is a load-bearing schema field, not a free-form annotation. `scripts/forge-status.sh` renders it prominently when present so the user sees the halted state at a glance. `scripts/cycle-validate.sh` validates the field shapes when present (still optional for backwards compat with v0.3.x state.json files that don't have these fields).
+
 ### Phase 0 — Plan
 
 Wrap the `codex-bridge:claudex` skill on the user's lazy prompt. The skill drives multi-round Claude↔Codex refinement, then enters plan mode and lands on a refined planning prompt.
@@ -142,7 +154,19 @@ Triggered after the **last** cycle's `consolidated-review` passes, **only if** `
   "remediation_cycles": 0,
   "light_mode": false,
   "quick_mode": false,
-  "started_at": "2026-04-25T01:00:00Z"
+  "started_at": "2026-04-25T01:00:00Z",
+
+  // Optional, F9 (v0.4.x). Set when a decision gate fails and the run halts
+  // pending user input. Resume protocol: see "Phase 0a — Resume check" above.
+  "paused": false,
+  "pause_history": [
+    {
+      "paused_at": "2026-04-27T19:50:00Z",
+      "resumed_at": "2026-04-27T21:30:00Z",   // null while still paused
+      "reason": "G-Boot gate failed: pnpm deploy-all errors at Phase 3",
+      "gate": "G-Boot"                         // optional; one of G-Boot|G-Schema|G-Pyth|G-Vault
+    }
+  ]
 }
 ```
 

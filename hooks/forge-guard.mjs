@@ -33,7 +33,7 @@
  * YAML frontmatter (v1/rig) when state.json is absent, for transitional repos.
  */
 
-import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, statSync, readdirSync, realpathSync } from "node:fs";
 import { resolve, dirname, basename, join } from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -133,13 +133,45 @@ function isForgeArtifact(filePath) {
   return filePath && filePath.includes(".forge/");
 }
 
+// Realpath the longest-existing-ancestor prefix of `p`, then re-attach the
+// missing trailing segments. Lets us canonicalize a path that names a planned
+// write (file doesn't exist; intermediate dirs may also not exist), as long as
+// at least one ancestor is on disk. When no ancestor exists, returns `p`
+// unchanged.
+function realpathLongestPrefix(p) {
+  let cur = p;
+  const tail = [];
+  // Stop walking at the filesystem root or empty.
+  while (cur && cur !== "/" && cur !== ".") {
+    try {
+      return tail.length === 0
+        ? realpathSync(cur)
+        : resolve(realpathSync(cur), ...tail);
+    } catch {
+      tail.unshift(basename(cur));
+      cur = dirname(cur);
+    }
+  }
+  return p;
+}
+
 // Strip the absolute repoRoot prefix from filePath. If filePath is not under
 // repoRoot, returns it unchanged. Used by phase-aware path checks that need
 // repo-relative comparison against tests.json / contract.md entries.
+//
+// Both sides go through realpathLongestPrefix() first: on macOS, process.cwd()
+// resolves through the /var → /private/var symlink, but the supplied filePath
+// usually doesn't, so a naive string-prefix compare misses every match when
+// the worktree path crosses a symlink (typical under mktemp). filePath is
+// often a planned write that doesn't exist yet, plus its intermediate dirs
+// may also be missing in synthetic test setups — the longest-prefix walk
+// handles both cases.
 function makeRepoRelative(filePath, repoRoot) {
-  return filePath.startsWith(repoRoot + "/")
-    ? filePath.slice(repoRoot.length + 1)
-    : filePath;
+  const realRoot = realpathLongestPrefix(repoRoot);
+  const realFile = realpathLongestPrefix(filePath);
+  return realFile.startsWith(realRoot + "/")
+    ? realFile.slice(realRoot.length + 1)
+    : realFile;
 }
 
 // Best-of-N workers stage candidate implementations under
@@ -442,6 +474,108 @@ function checkTestFileEditDuringGreen(filePath, forgeRoot) {
 }
 
 /**
+ * F10 (v0.4.x): Bash hook coverage during green.
+ *
+ * Edit/Write tool calls to test_file paths are blocked during green by
+ * checkTestFileEditDuringGreen (rule 5/8). But workers' tool allowlist
+ * includes Bash, which is a side door — `echo > test/foo.test.ts`,
+ * `sed -i test/foo.test.ts`, `cp src/x test/foo.test.ts`, and so on can
+ * write test files without triggering Edit/Write hooks.
+ *
+ * This check parses the Bash command for the obvious file-creating patterns
+ * and blocks when the resolved target is in the test_file set or matches a
+ * test_file via the worker candidate-staging prefix-peel.
+ *
+ * The parser is heuristic — accept some false negatives (multi-arg cp -t,
+ * shell quoting around the redirect target, etc.). Layered defense: F4 +
+ * rule 5/8 + F10 prompt-side guidance in agents/implementer-worker.md +
+ * the cycle-review pass that follows green. Don't claim completeness.
+ */
+function checkBashFileWriteDuringGreen(toolInput, forgeRoot) {
+  if (!toolInput) return null;
+  const command = String(toolInput.command || "");
+  if (!command) return null;
+
+  if (!forgeRoot) {
+    const possibleForge = resolve(process.cwd(), ".forge");
+    if (!existsSync(possibleForge)) return null;
+    forgeRoot = possibleForge;
+  }
+  const state = readState(forgeRoot);
+  if (!state) return null;
+  if ((state.phase || "") !== "green") return null;
+
+  const cycleN = state.current_cycle || state.currentCycle || 1;
+  const cycleDir = resolve(forgeRoot, "cycles", String(cycleN));
+  const tests = loadTestsJson(cycleDir);
+  if (tests.length === 0) return null;
+
+  const testFiles = new Set(tests.map((t) => t.test_file).filter(Boolean));
+  if (testFiles.size === 0) return null;
+
+  const writeTargets = extractBashWriteTargets(command);
+  if (writeTargets.length === 0) return null;
+
+  const repoRoot = resolve(forgeRoot, "..");
+  for (const t of writeTargets) {
+    // The target may be relative to cwd; resolve against repoRoot for the
+    // string-prefix path normalization step.
+    const abs = t.startsWith("/") ? t : resolve(repoRoot, t);
+    const rel = makeRepoRelative(abs, repoRoot);
+    const residue = peelCandidatePrefix(rel);
+    const matched = testFiles.has(rel) ? rel : (residue && testFiles.has(residue) ? residue : null);
+    if (matched) {
+      return [
+        "[BLOCK] Forge Guard: Bash file-write to test-file path during green",
+        "",
+        `Cycle ${cycleN} is in 'green' phase. Bash commands cannot write to`,
+        `paths listed in tests.json's test_file entries — that's the`,
+        `anti-weakening rule, applied to Bash to close the F4 worker side door.`,
+        "",
+        `Blocked target:    ${t}`,
+        `Resolved test_file: ${matched}`,
+        "",
+        "If you need to write a non-test file, target a target_file path or any",
+        "other repo path. If the test is genuinely wrong, escalate to the",
+        "orchestrator (rolls back to test-list); don't patch tests during green.",
+      ].join("\n");
+    }
+  }
+  return null;
+}
+
+// Heuristic: extract paths the command would write to.
+// Patterns covered:
+//   - `> path` and `>> path` redirects (single command; ignores quoted strings)
+//   - `| tee path` and `| tee -a path`
+//   - `cp src dst` and `mv src dst` (last positional arg = destination;
+//     multi-arg `-t` form is missed — known limitation)
+//   - `sed -i path` and `sed -i.bak path`
+function extractBashWriteTargets(command) {
+  const targets = [];
+  const stripQuotes = (s) => s.replace(/^["']|["']$/g, "");
+
+  // Output redirects: `cmd > path` or `cmd >> path`. Also `| tee [-a] path`.
+  // We deliberately keep this regex narrow — pattern hunts for the redirect
+  // operator near the END of a command segment, not anywhere it might appear
+  // inside a quoted string. Acceptable false-negatives over false-positives.
+  for (const m of command.matchAll(/(?:^|[^&|>])(?:>>?|\|\s*tee\s+(?:-a\s+)?)\s*([^\s;&|<>]+)/g)) {
+    targets.push(stripQuotes(m[1]));
+  }
+  // cp / mv: take the last whitespace-separated token before a terminator as
+  // the destination. Misses `-t DEST src1 src2` and complex flag arrangements;
+  // accept that.
+  for (const m of command.matchAll(/\b(?:cp|mv)\s+(?:-[a-zA-Z]+\s+)*[^\s;&|<>]+\s+([^\s;&|<>]+)/g)) {
+    targets.push(stripQuotes(m[1]));
+  }
+  // sed -i path and sed -i.bak path. The script-arg may be quoted.
+  for (const m of command.matchAll(/\bsed\s+(?:-[a-zA-Z]+\s+)*-i(?:\.\w+)?\s+(?:-[a-zA-Z]+\s+)*(?:'[^']*'|"[^"]*"|[^\s;&|<>]+)\s+([^\s;&|<>]+)/g)) {
+    targets.push(stripQuotes(m[1]));
+  }
+  return targets;
+}
+
+/**
  * Rule 6: Parallel reviewer fan-out enforcement.
  * Block second `reviewer` Agent dispatch if previous reviewer's output
  * appeared more than 5 seconds ago — that means dispatch is serial, not
@@ -664,8 +798,17 @@ function checkSpecialistRouting(toolInput, forgeRoot) {
   // No project_domain → fall back to required_subagents glob matches.
   if (required.length === 0) return null;
 
-  const dispatchTarget = inferTargetFromTaskInput(toolInput);
-  if (!dispatchTarget) return null;
+  // F12 (v0.4.x): match globs against the in-scope file list from the current
+  // cycle's contract.md, not against path-shaped tokens scraped from the
+  // dispatch prompt. Contract.md is authoritative; the prompt is incidental.
+  // Pre-cycle dispatches (current_cycle = 0 / no contract yet) skip the rule.
+  const state = readState(forgeRoot);
+  if (!state) return null;
+  const cycleN = Number(state.current_cycle || state.currentCycle || 0);
+  if (cycleN === 0) return null;
+  const contractPath = resolve(forgeRoot, "cycles", String(cycleN), "contract.md");
+  const contractTargets = listFilesInContract(contractPath);
+  if (contractTargets.length === 0) return null;
 
   const dispatchRole = inferRoleFromTaskInput(toolInput);
 
@@ -677,13 +820,15 @@ function checkSpecialistRouting(toolInput, forgeRoot) {
     if (Array.isArray(entry.applies_to) && entry.applies_to.length > 0) {
       if (!dispatchRole || !entry.applies_to.includes(dispatchRole)) continue;
     }
-    if (matchesGlob(entry.match, dispatchTarget)) {
+    // Match if ANY in-scope file from the contract hits this glob.
+    const matched = contractTargets.find((t) => matchesGlob(entry.match, t));
+    if (matched) {
       if (subagentType !== entry.subagent_type) {
         return [
           "[BLOCK] Forge Guard: specialist routing violated (required_subagents)",
           "",
           `agent-config.md binds match="${entry.match}" → subagent_type="${entry.subagent_type}".`,
-          `Inferred dispatch target: "${dispatchTarget}".`,
+          `Cycle ${cycleN}'s contract.md ## Files contains: "${matched}".`,
           dispatchRole ? `Inferred role: "${dispatchRole}".` : "",
           "",
           `This Task call uses subagent_type="${subagentType || "<unset>"}".`,
@@ -752,12 +897,22 @@ function parseYamlList(fm, key) {
 }
 
 function parseRequiredSubagents(fm) {
-  // Walk a block-style YAML list of mappings. The schema is fixed enough
-  // that we don't need a full parser.
+  // Walk a block-style YAML list of mappings. Accepts two shapes:
+  //
+  //   1. Same-line: `- match: "..."` opens an entry AND parses the field;
+  //      subsequent indented `subagent_type:` / `applies_to:` lines populate it.
+  //
+  //   2. Multi-line (F13): a bare `-` on its own line opens an empty entry;
+  //      every field (including `match`) arrives on subsequent indented lines.
+  //
+  // Entries with no `match` field are dropped at the end (parser saw a bare
+  // dash but no field lines followed).
   const out = [];
   const lines = fm.split("\n");
   let inSection = false;
   let current = null;
+  const flush = () => { if (current) { out.push(current); current = null; } };
+
   for (const raw of lines) {
     const line = raw.replace(/\s+$/, "");
     if (/^required_subagents:\s*$/.test(line)) {
@@ -765,24 +920,37 @@ function parseRequiredSubagents(fm) {
       continue;
     }
     if (!inSection) continue;
+
     // Section ends when a new top-level key appears (column 0, ends in ':').
     if (/^[A-Za-z_][A-Za-z0-9_]*:/.test(line)) {
-      if (current) out.push(current);
+      flush();
+      inSection = false;
       break;
     }
-    const startMatch = /^\s*-\s*match:\s*"?([^"#]+?)"?\s*(#.*)?$/.exec(line);
-    if (startMatch) {
-      if (current) out.push(current);
-      current = { match: startMatch[1].trim() };
+
+    // Same-line: `- match: "..."` opens an entry AND parses the field.
+    const sameLineStart = /^\s*-\s*match:\s*"?([^"#]+?)"?\s*(#.*)?$/.exec(line);
+    if (sameLineStart) {
+      flush();
+      current = { match: sameLineStart[1].trim() };
       continue;
     }
+
+    // Multi-line: bare `-` on its own line opens an empty entry.
+    if (/^\s*-\s*$/.test(line)) {
+      flush();
+      current = {};
+      continue;
+    }
+
+    // Indented k:v under the current entry.
+    if (!current) continue;
+    const matchKv = /^\s+match:\s*"?([^"#]+?)"?\s*(#.*)?$/.exec(line);
+    if (matchKv) { current.match = matchKv[1].trim(); continue; }
     const subAgentMatch = /^\s+subagent_type:\s*"?([^"#]+?)"?\s*(#.*)?$/.exec(line);
-    if (subAgentMatch && current) {
-      current.subagent_type = subAgentMatch[1].trim();
-      continue;
-    }
+    if (subAgentMatch) { current.subagent_type = subAgentMatch[1].trim(); continue; }
     const appliesMatch = /^\s+applies_to:\s*\[(.*?)\]\s*(#.*)?$/.exec(line);
-    if (appliesMatch && current) {
+    if (appliesMatch) {
       current.applies_to = appliesMatch[1]
         .split(",")
         .map((s) => s.trim().replace(/^["']|["']$/g, ""))
@@ -790,19 +958,10 @@ function parseRequiredSubagents(fm) {
       continue;
     }
   }
-  if (inSection && current) out.push(current);
-  return out;
-}
-
-function inferTargetFromTaskInput(toolInput) {
-  // Best-effort: the Task tool doesn't expose a target_file directly; look
-  // at the prompt for path-shaped tokens.
-  const prompt = String(toolInput.prompt || "");
-  const desc = String(toolInput.description || "");
-  const haystack = `${prompt}\n${desc}`;
-  const pathRe = /(?:^|[\s'"`(])([\w./-]+(?:\.\w+|\.toml))(?=[\s'"`)]|$)/m;
-  const m = pathRe.exec(haystack);
-  return m ? m[1] : null;
+  flush();
+  // Drop entries with no `match` (caller's contract is to filter out malformed
+  // bindings rather than silently no-op them at the call site).
+  return out.filter((e) => e.match);
 }
 
 function matchesGlob(pattern, target) {
@@ -950,6 +1109,12 @@ async function main() {
     if (toolName === "Edit" || toolName === "Write") {
       violations.push(checkTestFileEditDuringGreen(filePath, forgeRoot));
       violations.push(checkPostCycleFreeze(filePath, forgeRoot));
+    }
+
+    // F10 (v0.4.x): Bash file-writes to test_file paths during green close
+    // the side door that Edit/Write hooks miss. Heuristic-only.
+    if (toolName === "Bash") {
+      violations.push(checkBashFileWriteDuringGreen(toolInput, forgeRoot));
     }
 
     // v2 rule 3 — parallel reviewer fan-out

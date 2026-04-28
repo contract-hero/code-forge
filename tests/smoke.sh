@@ -33,16 +33,16 @@ assert() {
 }
 
 # Stand up a temp dir with a green-phase .forge/ scaffolding for hook tests.
-# realpath the temp dir: on macOS mktemp returns /var/... but cwd resolves
-# the /var → /private/var symlink, breaking the hook's string-prefix path
-# comparison. Canonicalize once here.
+# F11 made the hook itself realpath-aware, so we no longer need to canonicalize
+# the temp dir up-front. Returning the raw mktemp path lets the F11 assertion
+# exercise the symlink-crossing case for real.
 # Args: $1 test_file path; $2 optional target_file (default src/foo.ts).
 # Echoes the temp dir path; caller is responsible for `rm -rf` cleanup.
 setup_green_phase_fixture() {
   local test_file="$1"
   local target_file="${2:-src/foo.ts}"
   local dir
-  dir=$(cd "$(mktemp -d)" && pwd -P)
+  dir=$(mktemp -d)
   mkdir -p "${dir}/.forge/cycles/1"
   cat > "${dir}/.forge/state.json" << 'JSON'
 { "phase": "green", "current_cycle": 1, "iteration": 0 }
@@ -338,7 +338,9 @@ echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","promp
   | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
 assert "greenfield routing skips"            "$?" "0"
 
-# required_subagents glob fallback (no project_domains) — *.move + general-purpose → BLOCK
+# F12 (v0.4.x): required_subagents glob fallback now matches against the in-scope
+# files listed in cycles/N/contract.md, not prompt-text path tokens. Set up a
+# minimal state.json + contract.md so the rule has something to read.
 cat > "${GUARD_TEST_DIR}/.forge/agent-config.md" << 'EOF'
 ---
 project_domains: []
@@ -349,14 +351,97 @@ required_subagents:
 recommended_agents: []
 ---
 EOF
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","prompt":"As implementer-worker, edit src/foo.move","description":"x"}}' \
-  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "glob fallback blocks .move on impl-worker" "$?" "2"
+mkdir -p "${GUARD_TEST_DIR}/.forge/cycles/1"
+cat > "${GUARD_TEST_DIR}/.forge/state.json" << 'JSON'
+{ "phase": "contract", "current_cycle": 1, "iteration": 0 }
+JSON
+cat > "${GUARD_TEST_DIR}/.forge/cycles/1/contract.md" << 'EOF'
+# Cycle 1 — sui contract
 
-# Same glob, but applies_to scope excludes consolidator — should not block consolidator
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","prompt":"as consolidator, summarize cycles/1/_consolidated.json against contract.md","description":"x"}}' \
+## Behavior
+Add a Move module that does X.
+
+## Files
+- src/foo.move
+- src/index.ts
+
+## Acceptance
+- foo.move compiles.
+EOF
+
+# F12: contract lists a .move file → glob match → impl-worker without sui-pilot BLOCKS
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-implementer-worker","prompt":"impl-worker","description":"x"}}' \
   | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "glob fallback respects applies_to scope" "$?" "0"
+assert "F12: glob fallback blocks via contract.md" "$?" "2"
+
+# F12: same glob, but applies_to scope excludes consolidator → ALLOW
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-consolidator","prompt":"consolidator","description":"x"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F12: applies_to scope respected" "$?" "0"
+
+# F12: pre-cycle dispatch (current_cycle=0, no contract.md to read) → SKIP rule, ALLOW
+cat > "${GUARD_TEST_DIR}/.forge/state.json" << 'JSON'
+{ "phase": "spec-and-e2e", "current_cycle": 0, "iteration": 0 }
+JSON
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-planner","prompt":"draft spec.md","description":"planner"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F12: pre-cycle dispatch skips rule"  "$?" "0"
+
+# F12: contract has no matching files → ALLOW (no .move in this contract)
+cat > "${GUARD_TEST_DIR}/.forge/state.json" << 'JSON'
+{ "phase": "contract", "current_cycle": 1, "iteration": 0 }
+JSON
+cat > "${GUARD_TEST_DIR}/.forge/cycles/1/contract.md" << 'EOF'
+# Cycle 1 — pure TS contract
+
+## Behavior
+Add a TypeScript helper.
+
+## Files
+- src/foo.ts
+- tests/foo.test.ts
+
+## Acceptance
+- helper does Y.
+EOF
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","prompt":"impl-worker","description":"x"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F12: contract with no matching file allows" "$?" "0"
+
+# F13 (v0.4.x): parseRequiredSubagents accepts the multi-line YAML shape
+# (bare `-` on its own line, with all fields on subsequent indented lines).
+# Reset state.json + contract.md back to the Sui contract to give the binding
+# something to match against.
+cat > "${GUARD_TEST_DIR}/.forge/state.json" << 'JSON'
+{ "phase": "contract", "current_cycle": 1, "iteration": 0 }
+JSON
+cat > "${GUARD_TEST_DIR}/.forge/cycles/1/contract.md" << 'EOF'
+# Cycle 1 — sui contract
+
+## Behavior
+Move module.
+
+## Files
+- src/foo.move
+- src/index.ts
+
+## Acceptance
+- foo.move compiles.
+EOF
+cat > "${GUARD_TEST_DIR}/.forge/agent-config.md" << 'EOF'
+---
+project_domains: []
+required_subagents:
+  -
+    match: "**/*.move"
+    subagent_type: "sui-pilot:sui-pilot-agent"
+    applies_to: [planner, implementer-worker, reviewer]
+recommended_agents: []
+---
+EOF
+echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge-v2:forge-implementer-worker","prompt":"impl-worker","description":"x"}}' \
+  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F13: multi-line YAML binding is parsed and applied" "$?" "2"
 
 rm -rf "$GUARD_TEST_DIR"
 echo ""
@@ -438,6 +523,150 @@ bash "${SCRIPTS}/cycle-validate.sh" "${F1_DIR}/.forge/cycles/1/tests.json" >/dev
 assert "F1: tests.json without test_file rejects" "$?" "1"
 
 rm -rf "$F1_DIR"
+echo ""
+
+# --- F11: realpath in makeRepoRelative (macOS /var → /private/var) ---
+# setup_green_phase_fixture now returns the raw mktemp path. On macOS that's
+# typically /var/folders/... whose canonical form is /private/var/folders/...
+# Pre-F11, the hook's string-prefix compare missed the match because cwd
+# resolved the symlink but file_path didn't. Post-F11, makeRepoRelative
+# realpaths both sides — this assertion proves the block fires correctly even
+# with a symlink-crossing path.
+echo "Section 11.6: F11 — realpath path normalization"
+F11_DIR=$(setup_green_phase_fixture "tests/foo.test.ts")
+# Sanity: confirm we're actually exercising the symlink case on macOS.
+F11_REAL=$(cd "$F11_DIR" && pwd -P)
+if [[ "$F11_DIR" == "$F11_REAL" ]]; then
+  echo "  SKIP: F11 case (no symlink in temp-dir path; nothing to exercise here)"
+else
+  echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${F11_DIR}/tests/foo.test.ts\"}}" \
+    | (cd "${F11_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+  assert "F11: hook blocks across /var symlink"  "$?" "2"
+fi
+rm -rf "$F11_DIR"
+echo ""
+
+# --- F8: forge-implementer is a procedure manual (mirrors F6's pattern) ---
+echo "Section 11.7: F8 — forge-implementer halt-stub"
+grep -q "procedure manual, not a dispatchable" "${PLUGIN_ROOT}/agents/implementer.md"
+assert "F8: implementer.md declares procedure-manual halt-stub" "$?" "0"
+grep -q "tools: Read, Bash" "${PLUGIN_ROOT}/agents/implementer.md"
+assert "F8: implementer.md tools narrowed to Read, Bash"        "$?" "0"
+echo ""
+
+# --- F9: paused / pause_history schema + forge-status banner ---
+echo "Section 11.8: F9 — paused state schema"
+F9_DIR=$(mktemp -d)
+
+# Valid paused state.json validates
+cat > "${F9_DIR}/state.json" << 'JSON'
+{
+  "phase": "cycle-plan",
+  "current_cycle": 0,
+  "total_cycles": 0,
+  "paused": true,
+  "pause_history": [
+    {
+      "paused_at": "2026-04-27T19:50:00Z",
+      "reason": "G-Boot failed: pnpm deploy-all errors",
+      "gate": "G-Boot"
+    }
+  ]
+}
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${F9_DIR}/state.json" >/dev/null 2>&1
+assert "F9: valid paused state.json validates" "$?" "0"
+
+# v0.3.x state.json (no paused/pause_history) still validates
+cat > "${F9_DIR}/state.json" << 'JSON'
+{
+  "phase": "green",
+  "current_cycle": 1,
+  "iteration": 0
+}
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${F9_DIR}/state.json" >/dev/null 2>&1
+assert "F9: v0.3.x state.json (no paused fields) still validates" "$?" "0"
+
+# pause_history entry missing required field → reject
+cat > "${F9_DIR}/state.json" << 'JSON'
+{
+  "phase": "cycle-plan",
+  "paused": true,
+  "pause_history": [
+    { "paused_at": "2026-04-27T19:50:00Z" }
+  ]
+}
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${F9_DIR}/state.json" >/dev/null 2>&1
+assert "F9: pause_history missing reason rejects" "$?" "1"
+
+# paused: true with empty pause_history → reject
+cat > "${F9_DIR}/state.json" << 'JSON'
+{ "phase": "cycle-plan", "paused": true, "pause_history": [] }
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${F9_DIR}/state.json" >/dev/null 2>&1
+assert "F9: paused=true with empty history rejects" "$?" "1"
+
+# forge-status.sh renders the *** PAUSED *** banner when paused
+mkdir -p "${F9_DIR}/cycles"
+cat > "${F9_DIR}/state.json" << 'JSON'
+{
+  "phase": "cycle-plan",
+  "current_cycle": 0,
+  "total_cycles": 0,
+  "paused": true,
+  "pause_history": [
+    {
+      "paused_at": "2026-04-27T19:50:00Z",
+      "reason": "G-Boot failed",
+      "gate": "G-Boot"
+    }
+  ]
+}
+JSON
+OUT=$(bash "${SCRIPTS}/forge-status.sh" "${F9_DIR}" 2>/dev/null || true)
+echo "$OUT" | grep -q "\*\*\* PAUSED \*\*\*"
+assert "F9: forge-status.sh renders PAUSED banner" "$?" "0"
+
+rm -rf "$F9_DIR"
+echo ""
+
+# --- F10: Bash hook coverage during green ---
+echo "Section 11.9: F10 — Bash file-writes blocked during green"
+F10_DIR=$(setup_green_phase_fixture "tests/foo.test.ts" "src/foo.ts")
+
+# `> path` redirect to a test_file → BLOCK
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo trivial > tests/foo.test.ts\"}}" \
+  | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F10: Bash > to test_file blocks"   "$?" "2"
+
+# `>> path` append to a test_file → BLOCK
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo extra >> tests/foo.test.ts\"}}" \
+  | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F10: Bash >> to test_file blocks"  "$?" "2"
+
+# `cp src dst` where dst is a test_file → BLOCK
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cp src/something tests/foo.test.ts\"}}" \
+  | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F10: Bash cp to test_file blocks"  "$?" "2"
+
+# `sed -i path` on a test_file → BLOCK
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sed -i 's/expect/skip/' tests/foo.test.ts\"}}" \
+  | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F10: Bash sed -i on test_file blocks" "$?" "2"
+
+# `> path` redirect to a SOURCE file → ALLOW (not a test path)
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo content > src/foo.ts\"}}" \
+  | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F10: Bash > to source path allows" "$?" "0"
+
+# `pnpm test` (no file-write pattern) → ALLOW
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pnpm test\"}}" \
+  | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "F10: Bash with no write target allows" "$?" "0"
+
+rm -rf "$F10_DIR"
 echo ""
 
 # --- e2e-extract.sh + cycle-e2e-pass.sh + scenarios.json schema (P6 / v0.2.0) ---

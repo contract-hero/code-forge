@@ -331,6 +331,60 @@ PY
   fi
 }
 
+validate_state_json() {
+  # F9 (v0.4.x): validate optional `paused` and `pause_history` fields when
+  # present. The rest of state.json is freeform from the orchestrator's POV;
+  # a valid v0.3.x state.json (no paused/pause_history) still validates.
+  local f="$1"
+  echo "=== validating state.json ==="
+  if ! jq -e '.' "$f" >/dev/null 2>&1; then
+    echo "  FAIL: not parseable JSON" >&2
+    OVERALL=1
+    return 1
+  fi
+
+  # If `paused` is present, must be a boolean.
+  if jq -e 'has("paused")' "$f" >/dev/null 2>&1; then
+    if ! jq -e '.paused | type == "boolean"' "$f" >/dev/null 2>&1; then
+      echo "  FAIL: state.paused must be a boolean if present" >&2
+      OVERALL=1
+      return 1
+    fi
+  fi
+
+  # If `pause_history` is present, must be an array; each entry must have
+  # paused_at (string) and reason (string); resumed_at and gate are optional.
+  if jq -e 'has("pause_history")' "$f" >/dev/null 2>&1; then
+    if ! jq -e '.pause_history | type == "array"' "$f" >/dev/null 2>&1; then
+      echo "  FAIL: state.pause_history must be an array if present" >&2
+      OVERALL=1
+      return 1
+    fi
+    local bad
+    bad=$(jq '[.pause_history[]? | select(
+      (has("paused_at") | not) or (.paused_at | type != "string") or (.paused_at == "") or
+      (has("reason") | not) or (.reason | type != "string") or (.reason == "")
+    )] | length' "$f")
+    if [[ "$bad" != "0" ]]; then
+      echo "  FAIL: $bad pause_history entries missing paused_at or reason" >&2
+      OVERALL=1
+      return 1
+    fi
+  fi
+
+  # If both fields are set, paused: true requires at least one history entry.
+  local paused_now history_len
+  paused_now=$(jq -r '.paused // false' "$f" 2>/dev/null)
+  history_len=$(jq -r '.pause_history | length // 0' "$f" 2>/dev/null)
+  if [[ "$paused_now" == "true" && "$history_len" == "0" ]]; then
+    echo "  FAIL: state.paused=true but pause_history is empty (need ≥1 entry naming the gate/reason)" >&2
+    OVERALL=1
+    return 1
+  fi
+
+  echo "  OK"
+}
+
 validate_scenarios_json() {
   local f="$1"
   echo "=== validating scenarios.json ==="
@@ -372,6 +426,7 @@ if [[ -f "$TARGET" ]]; then
     cycle-plan.md) validate_cycle_plan_md "$TARGET" ;;
     agent-config.md) validate_agent_config_md "$TARGET" ;;
     scenarios.json) validate_scenarios_json "$TARGET" ;;
+    state.json) validate_state_json "$TARGET" ;;
     *) echo "ERROR: don't know how to validate $TARGET" >&2; exit 2 ;;
   esac
 elif [[ -d "$TARGET" ]]; then
@@ -388,11 +443,13 @@ elif [[ -d "$TARGET" ]]; then
       cycle-plan.md) validate_cycle_plan_md "$f" ;;
       agent-config.md) validate_agent_config_md "$f" ;;
       scenarios.json) validate_scenarios_json "$f" ;;
+      state.json) validate_state_json "$f" ;;
     esac
   done < <(find "$TARGET" \( \
     -name 'subagent-*.json' -o -name 'tests.json' -o -name 'contract.md' \
     -o -name 'plan.md' -o -name 'spec.md' -o -name 'cycle-plan.md' \
     -o -name 'agent-config.md' -o -name 'scenarios.json' \
+    -o -name 'state.json' \
     \) -type f 2>/dev/null)
 
   if [[ "$found_any" == "0" ]]; then

@@ -29,11 +29,15 @@ version: 0.2.0
 
 # Code Forge v2 — Cycle Protocol
 
-**You are the orchestrator of Code Forge v2.** This skill loaded into your main session; from now until `phase: done`, you drive the cycle yourself — dispatching planner/test-author/implementer/reviewer/consolidator/codebase-explorer subagents as the protocol requires, updating `.forge/state.json` between phases, and invoking gate scripts under `${CLAUDE_PLUGIN_ROOT}/scripts/`.
+**You are the orchestrator of Code Forge v2.** This skill loaded into your main session; from now until `phase: done`, you drive the cycle yourself — dispatching planner/test-author/reviewer/consolidator/codebase-explorer subagents as the protocol requires, **dispatching the 6 implementer-workers directly during each cycle's green phase** (the implementer-coordinator's role is now bookkeeping you do inline, per F8 in v0.4.x), updating `.forge/state.json` between phases, and invoking gate scripts under `${CLAUDE_PLUGIN_ROOT}/scripts/`.
 
-`agents/forge-orchestrator.md` is your **procedure manual** — read it to know what each phase does. It is NOT a separate dispatchable subagent: subagents in Claude Code lack the `Task` tool and cannot fan out reviewers/workers. If you try to dispatch `code-forge-v2:forge-orchestrator` it will halt immediately and tell you to drive the protocol from this session instead. Don't dispatch it. Read `agents/forge-orchestrator.md` and execute its steps directly.
+**Procedure manuals** (read inline; do NOT dispatch as subagents):
+- `agents/forge-orchestrator.md` — overall run shape (Phase 0/1/2 + per-cycle phases + Phase F).
+- `agents/implementer.md` — green-phase best-of-N protocol (5 steps: dispatch 6 workers in single turn, wait, score each candidate, pick simplest passer, apply + write synthesis-notes).
 
-The other agents listed in `plugin.json` (`forge-planner`, `forge-test-author`, `forge-implementer`, `forge-implementer-worker`, `forge-reviewer`, `forge-consolidator`, `forge-codebase-explorer`) ARE meant to be dispatched as subagents from this session — that's how the parallel fan-out works.
+Both define halt-stubs at the top that fire if anything tries to dispatch them as subagents. Subagents in Claude Code lack `Agent`/`Task`, so a spawned coordinator cannot fan out the workers/reviewers — it would degrade silently. Read these files inline; do not dispatch them.
+
+**Dispatchable subagents** (from this session): `forge-planner`, `forge-test-author`, `forge-implementer-worker`, `forge-reviewer`, `forge-consolidator`, `forge-codebase-explorer`. That's how the parallel fan-out works.
 
 **Lazy prompt:** $ARGUMENTS
 
@@ -80,7 +84,7 @@ For each cycle in `cycle-plan.md`:
 | `contract` | `planner` (contract mode) | `cycles/N/contract.md` | `cycle-validate.sh` ✓ + Codex G5 (optional) |
 | `test-list` | `test-author` | `cycles/N/tests.json` | `cycle-validate.sh` ✓ + orchestrator review |
 | `red` | `test-author` | `cycles/N/red.log` + `red.json` | `cycle-tests-pass.sh red` exit 0 (= tests fail correctly) |
-| `green` (best-of-N) | `implementer` (Opus coordinator) + N=6 `implementer-worker`s (Sonnet) | `cycles/N/green/candidates/worker-K/`, `synthesis-notes.md`, `green.log` | `cycle-tests-pass.sh green` exit 0 against the chosen candidate + forge-guard rules 5/7/8 (no test-file edits across 1+N family; no serial worker dispatch) |
+| `green` (best-of-N) | main session (per `agents/implementer.md` procedure) + N=6 `implementer-worker`s (Sonnet, dispatched in a single parallel-Task turn) | `cycles/N/green/candidates/worker-K/`, `synthesis-notes.md`, `green.log` | `cycle-tests-pass.sh green` exit 0 against the chosen candidate + forge-guard rules 5/7/8 (no test-file edits across the 1+N family; no serial worker dispatch) + F10 Bash hook coverage |
 | `consolidated-review` | `reviewer` ×N + `consolidator` | `cycles/N/_consolidated.json` + `cycles/N/review.md` | `cycle-pass.sh` exit 0 (no critical, no disputed) + Codex G5 (optional) |
 
 **Single-turn dispatch is load-bearing** for both `green` (worker fan-out) and `consolidated-review` (reviewer fan-out). All workers / reviewers must be dispatched in one assistant message via parallel `Agent` tool calls with `run_in_background: true`. Serial dispatch loses parallelism *and* independence. forge-guard rules 3 and 7 enforce this.
@@ -152,19 +156,20 @@ If `.forge/state.json` exists in cwd when `/forge` is invoked, resume from the r
 
 ## Driving the protocol
 
-After parsing flags from `$ARGUMENTS` and creating `.forge/state.json` for a fresh run:
+After parsing flags from `$ARGUMENTS`:
 
-1. Initialize `.forge/state.json` with the parsed flags and `phase: "plan"` (or `phase: "spec-and-e2e"` if `--quick`).
+0. **Resume check (F9, v0.4.x).** If `.forge/state.json` already exists and `state.paused === true`, the previous run halted on a failed decision gate. Read the most recent `pause_history` entry, then `AskUserQuestion` with three options: Resume the gate, Abort the run, or Restart (wipe `.forge/`). Don't auto-advance over a paused state. If `paused !== true` (or state.json doesn't exist for a fresh run), continue with step 1.
+1. Initialize `.forge/state.json` (fresh run only) with the parsed flags and `phase: "plan"` (or `phase: "spec-and-e2e"` if `--quick`).
 2. Read `agents/forge-orchestrator.md` — it's the procedure manual for the run shape (Phase 0/1/2, per-cycle phases, Phase F) and the gate scripts.
 3. Drive the protocol step-by-step yourself:
    - Phase 0 (Plan): wrap `codex-bridge:claudex` on the lazy prompt; write `.forge/plan.md`. Skip when `--quick`.
    - Phase 1 (Spec & e2e): dispatch the **planner** subagent in `spec-and-e2e` mode; receive `.forge/spec.md` + `.forge/agent-config.md`.
    - Phase 2 (Cycle plan): dispatch the **planner** subagent in `cycle-plan` mode; receive `.forge/cycle-plan.md`.
-   - Per cycle: dispatch **planner**(contract) → **test-author**(test-list, then red) → **implementer**(green; the implementer in turn dispatches `IMPLEMENTERS` workers as nested Task calls in a single turn) → **reviewer** ×N in a single turn → **consolidator**.
+   - Per cycle: dispatch **planner**(contract) → **test-author**(test-list, then red) → **green phase** (read `agents/implementer.md` for the procedure; dispatch `IMPLEMENTERS` worker subagents directly in a single parallel-Task turn from this session; score candidates; pick simplest passer; apply via rsync; write `synthesis-notes.md`) → **reviewer** ×N in a single turn → **consolidator**.
    - Phase F (e2e-review, if `spec.md` has `## E2E Tests`): `e2e-extract.sh` → reviewers ×N with `MODE=e2e` in a single turn → consolidator with `MODE=e2e` → `cycle-e2e-pass.sh` gate.
 4. Update `.forge/state.json` before every phase transition. forge-guard reads it for invariant checking.
 5. When state.json reports `phase: "done"`, surface the final review path(s) to the user.
 
-**Don't dispatch `code-forge-v2:forge-orchestrator` as a subagent.** It will halt — subagents lack `Task` and cannot fan out reviewers/workers. The orchestrator runs in this session, with you driving.
+**Don't dispatch `code-forge-v2:forge-orchestrator` or `code-forge-v2:forge-implementer` as subagents.** Both halt — subagents lack `Task`/`Agent` and cannot fan out reviewers/workers. Both are procedure manuals you read inline; the dispatching happens from this session.
 
 That's the protocol. The scripts gate the transitions; `agents/forge-orchestrator.md` carries the per-phase detail.

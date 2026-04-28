@@ -1,2 +1,5 @@
 .DS_Store
 *.swp
+
+# Local git worktrees (each is a separate checkout managed by `git worktree`).
+.claude/worktrees/
