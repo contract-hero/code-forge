@@ -1,10 +1,17 @@
 # Bug: forge-orchestrator halts immediately when dispatched as a subagent
 
+> **STATUS: All amendments resolved.** This document is preserved as a historical record of the bug-doc-as-spec process the SEDEFI-176 session used to triage three Claude-Code subagent-Agent-strip bugs in real time. Each section's resolution:
+>
+> - **Original bug** (forge-orchestrator self-aborts when dispatched as a subagent) — resolved in v0.3.x (PR #1, commit `e0d6f95` / **F6**). `agents/forge-orchestrator.md` became a procedure manual; SKILL.md hand-off rewritten so the main session drives the protocol.
+> - **Amendment 1** (project_domains over-broad routing) — resolved in v0.3.x (PR #1, commit `02bca7a` / **F7**). `checkSpecialistRouting` scoped to source-touching roles only (implementer-worker, reviewer); orchestration roles keep their own tool surfaces.
+> - **Amendment 2** (state.json paused-state schema gap) — resolved in v0.4.x (PR #2, commit `0a27082` / **F9**). `paused` + `pause_history` schema fields, Phase 0a resume UX, `forge-status.sh` paused banner, validator coverage.
+> - **Amendment 3** (forge-implementer gets Agent stripped on spawn) — resolved in v0.4.x (PR #2, commit `c7e6149` / **F8**). `agents/implementer.md` became a procedure manual mirroring F6.
+
 **Filed:** 2026-04-27
 **Filed by:** main Claude Code session driving SEDEFI-176 (deepbook-sandbox-evaluation-apps worktree)
 **For:** `code-forge-v0.2.0-implementation` session (this worktree, branch `worktree-forge-fix-v0.3`)
-**Severity:** Blocking. `/forge` is unrunnable end-to-end as currently wired.
-**Reproduces in:** `code-forge-v2` v0.2.0 (deployed copy at `~/workspace/dotfiles/.claude/plugins/code-forge-v2/`).
+**Severity (at filing):** Blocking. `/forge` was unrunnable end-to-end as wired.
+**Reproduced in:** `code-forge-v2` v0.2.0 (deployed copy at `~/.claude/plugins/code-forge-v2/`).
 
 ## TL;DR
 
