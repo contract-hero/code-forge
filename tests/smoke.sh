@@ -71,8 +71,8 @@ command -v jq >/dev/null 2>&1
 assert "jq present"           "$?" "0"
 command -v node >/dev/null 2>&1
 assert "node present"         "$?" "0"
-[[ -x "${SCRIPTS}/forge.sh" ]]
-assert "forge.sh executable"  "$?" "0"
+[[ -f "${PLUGIN_ROOT}/skills/code-forge/SKILL.md" ]]
+assert "SKILL.md present"     "$?" "0"
 [[ -f "${PLUGIN_ROOT}/templates/spec.md.template" ]]
 assert "spec.md.template present" "$?" "0"
 [[ -f "${PLUGIN_ROOT}/docs/goal-integration.md" ]]
@@ -725,34 +725,8 @@ assert "forge-status renders pending=1"        "$?" "0"
 rm -rf "$FS_DIR"
 echo ""
 
-# --- Section 23: forge.sh refuses stale state.json without --resume ---
-echo "Section 23: forge.sh --resume guard for stale .forge/state.json"
-ST_DIR=$(mktemp -d)
-mkdir -p "${ST_DIR}/.forge"
-cat > "${ST_DIR}/.forge/state.json" << 'JSON'
-{ "spec_path": ".forge/spec.md", "cycles": {} }
-JSON
-
-# Without --resume, stale state.json triggers an error (exit 2)
-(cd "$ST_DIR" && bash "${SCRIPTS}/forge.sh" "task" --quick) >/dev/null 2>&1
-assert "forge.sh refuses stale state.json"     "$?" "2"
-
-rm -rf "$ST_DIR"
-echo ""
-
-# --- Section 24: forge.sh --help and missing-argument behavior ---
-echo "Section 24: forge.sh argument handling"
-HELP_OUT=$(bash "${SCRIPTS}/forge.sh" --help 2>&1)
-echo "$HELP_OUT" | grep -q "Usage:"
-assert "forge.sh --help emits Usage"            "$?" "0"
-
-# Empty description → error exit 2
-bash "${SCRIPTS}/forge.sh" --quick >/dev/null 2>&1
-assert "forge.sh with no description exits 2"   "$?" "2"
-echo ""
-
-# --- Section 25: forge-status.sh surfaces malformed result.json ---
-echo "Section 25: forge-status.sh result.json malformed detection"
+# --- Section 23: forge-status.sh surfaces malformed result.json ---
+echo "Section 23: forge-status.sh result.json malformed detection"
 MD_DIR=$(mktemp -d)
 mkdir -p "${MD_DIR}/cycles/C1"
 cat > "${MD_DIR}/state.json" << 'JSON'
