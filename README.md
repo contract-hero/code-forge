@@ -16,7 +16,7 @@ Two paths, both Claude-Code-native:
 | Path | What it gives you |
 |---|---|
 | **Submodule at `~/.claude/code-forge/`** (recommended) | Single source-of-truth; `git submodule update --remote --merge code-forge` to update |
-| **Marketplace install** (`/plugin install alilloig/code-forge@main`) | Drop-in via Claude Code's plugin marketplace |
+| **Marketplace install** (`/plugin install contract-hero/code-forge@main`) | Drop-in via Claude Code's plugin marketplace |
 
 Requirements:
 
@@ -186,7 +186,7 @@ passes.
 
 ## Related
 
-- [`sui-pilot`](https://github.com/alilloig/sui-pilot) — source of the
+- [`sui-pilot`](https://github.com/contract-hero/sui-pilot) — source of the
   parallel-review pattern (`move-pr-review` skill).
-- [`codex-bridge`](https://github.com/alilloig/codex-bridge) — Codex MCP
+- [`codex-bridge`](https://github.com/contract-hero/codex-bridge) — Codex MCP
   integration used by the planner's spec/e2e cross-checks.
