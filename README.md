@@ -4,11 +4,11 @@ A multi-agent build system that turns lazy prompts into shippable PoCs/MVPs thro
 
 > **Single source of truth — [alilloig.github.io/code-forge](https://alilloig.github.io/code-forge/)**
 > The GitHub Pages landing is the easiest way to understand what Code Forge does:
-> diagrams of the outer + per-cycle architecture, the dimension menu, what changed
-> from v0.1.0, and a quick-start. Source: [`docs/index.html`](./docs/index.html).
+> diagrams of the outer + per-cycle architecture, the dimension menu, the one
+> surviving hook, and a quick-start. Source: [`docs/index.html`](./docs/index.html).
 > Enable Pages in repo settings → Pages → Source: `main` branch / `/docs` folder.
 
-> Status: **v0.2.0 (Option D) — rewrite around Claude Code's `/goal` feature.** The hand-rolled state machine + 7 of 8 forge-guard hooks were replaced by an outer `claude -p /goal` session driving per-cycle `claude -p /goal` children. One hook survives: test files are read-only during green phase. See [`docs/goal-integration.md`](./docs/goal-integration.md) for the full protocol and [`templates/spec.md.template`](./templates/spec.md.template) for the spec skeleton the planner fills in.
+> See [`docs/goal-integration.md`](./docs/goal-integration.md) for the full protocol and [`templates/spec.md.template`](./templates/spec.md.template) for the spec skeleton the planner fills in.
 
 ## Quick start
 
