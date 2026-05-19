@@ -124,31 +124,21 @@ questions:
 
 **Q1 — Reviewer model**:
 - Options: `opus` (default, more thorough) | `sonnet` (cheaper, fine
-  for simple PoCs)
+  for simple PoCs).
 
 **Q2 — Reviewer dimensions** (multi-select; default
 `[correctness, simplicity, security]`):
 
-Tier 1 (always shown):
-- `correctness` — does the code do what spec says?
-- `design` — module boundaries, abstractions, structure.
-- `error-handling` — failure paths, edge cases, swallowed errors.
-- `simplicity` — minimal code, no premature abstraction.
-- `tests-vs-impl` — are tests tautological or do they exercise the impl?
-- `security` — vuln classes, input validation, auth, secrets.
+- Tier 1: `correctness | design | error-handling | simplicity |
+  tests-vs-impl | security`.
+- Tier 2: `performance | naming-readability | dependency-hygiene |
+  type-safety | concurrency | observability`.
+- Tier 3 (declare per-project, not shown by default):
+  `sui-move-idioms | frontend-a11y | api-contract-stability`.
 
-Tier 2 (always shown):
-- `performance` — algorithmic complexity, obvious bottlenecks.
-- `naming-readability` — names communicate intent; code reads top-to-bottom.
-- `dependency-hygiene` — unused / outdated / vulnerable deps.
-- `type-safety` — type contracts at boundaries; no `any` escape hatches.
-- `concurrency` — race conditions, shared mutable state.
-- `observability` — logging, error surfacing, debuggability.
-
-Tier 3 dimensions (`sui-move-idioms`, `frontend-a11y`,
-`api-contract-stability`) are **not** in the default menu. If the user
-asks for one, add it to the dimensions list — the cycle child will
-substitute it into the reviewer prompt the same way as Tier 1/2 dims.
+See `agents/reviewer.md` for what each dimension covers — that file is
+the single source of truth for the dimension-to-lens map; do not
+restate it here.
 
 Append the `## Reviewer Config` block to spec.md:
 
@@ -165,13 +155,35 @@ The **length of `dimensions`** is the reviewer count for every cycle.
 Duplicates are allowed (two `security` reviewers = two parallel security
 reviews of the same code, leveraging non-determinism).
 
-### 1g — Add `## /goal Conditions` and `## Reviewer Prompt` blocks
+### 1g — Mirror cycle goal_conditions into state.json
 
-Copy these verbatim from `templates/spec.md.template`. The `/goal
-Conditions` block holds the outer + per-cycle goal-string templates; the
-`Reviewer Prompt` block holds the dimensional reviewer template with a
-`{dimension}` placeholder. The cycle child instantiates the prompt per
-reviewer.
+The outer Claude session reads each cycle's `goal_condition` from
+`.forge/state.json` at spawn time (so it can construct the `claude -p
+"/goal ..."` invocation without parsing YAML embedded in markdown).
+You're the writer that bridges the two:
+
+For each entry in your freshly-authored `spec.md ## Cycle Plan`, write
+`goal_condition` into `state.json.cycles[<id>].goal_condition`. Use the
+verbatim string from the YAML block. If the entry's status field
+doesn't exist yet, also set `status: "pending"`.
+
+```jsonc
+// example partial state.json after Phase 1
+{
+  "spec_path": ".forge/spec.md",
+  "current_cycle": null,
+  "cycles": {
+    "C1": {
+      "status": "pending",
+      "goal_condition": "cycles/C1/result.json exists with status: pass AND cycles/C1/review.md has 0 critical clusters, or stop after 30 turns"
+    },
+    "C2": { "status": "pending", "goal_condition": "…" }
+  }
+}
+```
+
+Without this mirror, the outer session has no way to read your authored
+goal_conditions and would default every child to an empty `/goal`.
 
 ### 1h — Emit agent-config.md
 

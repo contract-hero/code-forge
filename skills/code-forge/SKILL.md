@@ -22,8 +22,6 @@ allowed-tools:
   - Bash
   - Glob
   - Grep
-  - TaskCreate
-  - TaskUpdate
 author: alilloig
 version: 0.2.0
 ---

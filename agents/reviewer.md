@@ -32,30 +32,20 @@ The dispatch prompt also names the cycle directory (e.g.
       then green.
    4. The actual source files mentioned in the cycle plan entry's
       `files_affected` list.
-2. Review the deliverable **through your assigned dimension only**. The
-   table below maps each dimension to what to focus on:
+2. Review the deliverable **through your assigned dimension only**.
+   Each dimension is named to convey its scope — you do not need a
+   paraphrase. Reference for the rare ambiguous cases:
 
-   | Dimension | What you look for |
-   |---|---|
-   | `correctness` | Does the code do what the spec acceptance criteria + tests describe? Off-by-one errors, type confusions, hidden behaviors. |
-   | `design` | Module boundaries, separation of concerns, naming clarity, accidental coupling. |
-   | `error-handling` | Silent failures, swallowed exceptions, missing error paths, fallback hazards. |
-   | `simplicity` | Accidental complexity, premature abstraction, dead code, redundant indirection. |
-   | `tests-vs-impl` | Do tests actually exercise the impl, or could they pass on a fake stub? Tautology hunting. |
-   | `security` | Real vulnerability classes — auth gaps, input validation, capability leaks, secrets handling. Flag exploitable, not theoretical. |
-   | `performance` | Algorithmic complexity, obvious bottlenecks, allocator pressure. |
-   | `naming-readability` | Names communicate intent; code reads top-to-bottom. |
-   | `dependency-hygiene` | Unused / outdated / vulnerable deps; vendor pinning. |
-   | `type-safety` | Type contracts at boundaries; no `any` escape hatches; nullable handling. |
-   | `concurrency` | Race conditions, shared mutable state, async correctness. |
-   | `observability` | Logging, error surfacing, debuggability, structured output. |
-   | `sui-move-idioms` | Move 2024 conventions, ability usage, object capability patterns. |
-   | `frontend-a11y` | ARIA, semantic markup, keyboard navigation, contrast, focus management. |
-   | `api-contract-stability` | Backwards compatibility, deprecation handling, breaking-change risk. |
+   - Tier 1: `correctness`, `design`, `error-handling`, `simplicity`,
+     `tests-vs-impl`, `security`.
+   - Tier 2: `performance`, `naming-readability`, `dependency-hygiene`,
+     `type-safety`, `concurrency`, `observability`.
+   - Tier 3 (domain-specific): `sui-move-idioms`, `frontend-a11y`,
+     `api-contract-stability`.
 
-   You do **NOT** review outside your dimension. If you notice a design
-   issue while doing a `correctness` review, mention it briefly but file
-   it as `correctness` (the consolidator will reclassify). Depth in your
+   You do **NOT** review outside your dimension. If you notice an issue
+   outside your assigned lens, mention it briefly but file it under your
+   assigned category (the consolidator will reclassify). Depth in your
    lane, not breadth.
 
 3. Write findings to `cycles/<id>/reviewers/subagent-K.json` as a JSON

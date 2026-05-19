@@ -1,28 +1,29 @@
 #!/usr/bin/env bash
-# Strict schema validator for forge cycle artifacts.
+# Strict schema validator for forge cycle artifacts (Option D).
 #
 # Usage: cycle-validate.sh <path>
 #   <path> can be:
-#     - a cycle directory (e.g. .forge/cycles/1/) — validates everything found
-#     - a reviewers directory (e.g. .forge/cycles/1/reviewers/) — validates subagent-*.json
-#     - a single .json file (subagent-N.json or tests.json) — validates that file
+#     - a directory tree — every recognized artifact is validated
+#     - a single .json or .md file — that file is validated
 #
-# Validates whatever it finds:
-#   - subagent-N.json (N in 0..REVIEWERS) — reviewer findings, strict schema
-#   - tests.json — test list (test-author phase)
-#   - contract.md — structural check (required H2 sections)
+# Recognized artifacts (Option D set):
+#   - subagent-N.json    reviewer findings, strict schema
+#   - tests.json         test list (test-author phase)
+#   - plan.md            non-empty + has H1 title
+#   - spec.md            has required sections (Vision, Architecture, AC,
+#                        E2E Tests, Cycle Plan, Reviewer Config)
+#   - agent-config.md    YAML frontmatter with project_domains,
+#                        required_subagents, recommended_agents
+#   - state.json         phase + current_cycle + cycles[*].status enums
+#   - result.json        status, cycle_id, summary, review_clusters
 #
 # Exits non-zero if any artifact fails validation.
-#
-# Env:
-#   REVIEWERS — max reviewer index (default 6)
 #
 # Requires: jq.
 
 set -u
 set -o pipefail
 
-REVIEWERS="${REVIEWERS:-6}"
 TARGET="${1:-}"
 
 if [[ -z "$TARGET" ]]; then
@@ -37,9 +38,11 @@ fi
 
 VALID_SEVERITIES='["critical","high","medium","low","info"]'
 VALID_CONFIDENCE='["high","medium","low"]'
-VALID_CATEGORIES='["correctness","design","error-handling","simplicity","tests-vs-impl","dependencies","security","performance","documentation","build","e2e-flow"]'
+VALID_CATEGORIES='["correctness","design","error-handling","simplicity","tests-vs-impl","dependencies","security","performance","documentation","build","naming-readability","dependency-hygiene","type-safety","concurrency","observability","sui-move-idioms","frontend-a11y","api-contract-stability"]'
 VALID_TEST_KINDS='["unit","integration","property"]'
-VALID_E2E_KINDS='["ui","api","cli"]'
+VALID_PHASES='["plan","spec","cycle-plan","contract","test-list","red","green","review","done"]'
+VALID_CYCLE_STATUS='["pending","in_progress","pass","fail"]'
+VALID_RESULT_STATUS='["pass","fail"]'
 VALID_DOMAIN_RELEVANCE='["high","medium","low"]'
 KNOWN_PROJECT_DOMAINS='["sui-dapp","walrus","seal","sui-cli"]'
 
@@ -48,9 +51,7 @@ OVERALL=0
 validate_reviewer() {
   local f="$1"
   local n
-  # POSIX-portable: use [0-9][0-9]* instead of \+ (GNU-only). BSD sed on macOS
-  # treats \+ as literal '+', so the capture group never matches and reviewer
-  # ID prefix validation silently no-ops.
+  # POSIX-portable: use [0-9][0-9]* instead of GNU-only \+.
   n=$(basename "$f" | sed -n 's/^subagent-\([0-9][0-9]*\)\.json$/\1/p')
   if [[ -z "$n" ]]; then
     echo "  SKIP: $f does not match subagent-N.json"
@@ -107,6 +108,16 @@ validate_tests_json() {
     return 1
   fi
 
+  local total
+  total=$(jq 'length' "$f")
+  # Reject empty tests.json — a cycle with no tests is not a valid contract,
+  # and cycle-init.sh's `[]` stub should be replaced by the test-author.
+  if [[ "$total" == "0" ]]; then
+    echo "  FAIL: tests.json is empty (cycle has zero tests authored)" >&2
+    OVERALL=1
+    return 1
+  fi
+
   local bad
   bad=$(jq --argjson kinds "$VALID_TEST_KINDS" '
     [ .[] | select(
@@ -119,38 +130,14 @@ validate_tests_json() {
       ) | .id // "<missing-id>"
     ]' "$f")
 
-  local bad_count total
+  local bad_count
   bad_count=$(echo "$bad" | jq 'length')
-  total=$(jq 'length' "$f")
   if [[ "$bad_count" != "0" ]]; then
     echo "  FAIL: $bad_count of $total tests failed schema check"
     echo "  Failing IDs: $bad"
     OVERALL=1
   else
     echo "  OK ($total tests)"
-  fi
-}
-
-validate_contract_md() {
-  local f="$1"
-  echo "=== validating contract.md ==="
-
-  local missing=0
-  if ! grep -q '^# ' "$f"; then
-    echo "  FAIL: missing H1 title"
-    missing=1
-  fi
-  for section in "## Behavior" "## Files" "## Acceptance"; do
-    if ! grep -q "^${section}" "$f"; then
-      echo "  FAIL: missing required section '${section}'"
-      missing=1
-    fi
-  done
-
-  if [[ "$missing" == "0" ]]; then
-    echo "  OK"
-  else
-    OVERALL=1
   fi
 }
 
@@ -170,6 +157,17 @@ validate_plan_md() {
   echo "  OK"
 }
 
+# Strip fenced code blocks from a file before grepping for headings. Prevents
+# spec examples (triple-backtick blocks) from being mistaken for real
+# section headings.
+strip_fenced_blocks() {
+  awk '
+    BEGIN { in_fence = 0 }
+    /^```/ { in_fence = 1 - in_fence; next }
+    !in_fence { print }
+  ' "$1"
+}
+
 validate_spec_md() {
   local f="$1"
   echo "=== validating spec.md ==="
@@ -178,17 +176,17 @@ validate_spec_md() {
     OVERALL=1
     return 1
   fi
+  local stripped
+  stripped=$(strip_fenced_blocks "$f")
   local missing=0
-  if ! grep -q '^# ' "$f"; then
+  if ! printf '%s\n' "$stripped" | grep -qE '^# '; then
     echo "  FAIL: missing H1 title"
     missing=1
   fi
-  # Option D: spec.md must include Vision + Architecture + E2E Tests +
-  # Cycle Plan + Reviewer Config. The Cycle Plan block is what the outer
-  # /goal session iterates; the Reviewer Config block parameterizes the
-  # cycle child's reviewer fan-out.
-  for section in "## Vision" "## Architecture" "## E2E Tests" "## Cycle Plan" "## Reviewer Config"; do
-    if ! grep -q "^${section}" "$f"; then
+  # Option D required sections. Use exact-heading match (`^${section}( |$)`)
+  # so '## Reviewer Configuration' does not satisfy '## Reviewer Config'.
+  for section in "## Vision" "## Acceptance Criteria" "## Architecture" "## E2E Tests" "## Cycle Plan" "## Reviewer Config"; do
+    if ! printf '%s\n' "$stripped" | grep -qE "^${section}( |$)"; then
       echo "  FAIL: missing required section '${section}'"
       missing=1
     fi
@@ -198,57 +196,6 @@ validate_spec_md() {
   else
     OVERALL=1
   fi
-}
-
-validate_result_json() {
-  # Option D: each cycle child writes result.json with status + review_clusters
-  # before exiting. The outer /goal evaluator reads status: pass to verdict.
-  local f="$1"
-  echo "=== validating result.json ==="
-  if ! jq -e 'type == "object"' "$f" >/dev/null 2>&1; then
-    echo "  FAIL: not a JSON object" >&2
-    OVERALL=1
-    return 1
-  fi
-  local missing=0
-  # status must be pass | fail
-  local status
-  status=$(jq -r '.status // ""' "$f" 2>/dev/null || echo "")
-  if [[ "$status" != "pass" && "$status" != "fail" ]]; then
-    echo "  FAIL: status must be \"pass\" or \"fail\" (got: \"$status\")"
-    missing=1
-  fi
-  # cycle_id required
-  if ! jq -e 'has("cycle_id") and (.cycle_id | type == "string")' "$f" >/dev/null 2>&1; then
-    echo "  FAIL: missing or non-string cycle_id"
-    missing=1
-  fi
-  # review_clusters required if status is pass | fail
-  if ! jq -e 'has("review_clusters") and (.review_clusters | type == "object")' "$f" >/dev/null 2>&1; then
-    echo "  FAIL: missing or non-object review_clusters"
-    missing=1
-  fi
-  if [[ "$missing" == "0" ]]; then
-    echo "  OK"
-  else
-    OVERALL=1
-  fi
-}
-
-validate_cycle_plan_md() {
-  local f="$1"
-  echo "=== validating cycle-plan.md ==="
-  if [[ ! -s "$f" ]]; then
-    echo "  FAIL: cycle-plan.md is empty or missing"
-    OVERALL=1
-    return 1
-  fi
-  if ! grep -q '^## Cycle ' "$f"; then
-    echo "  FAIL: cycle-plan.md must contain at least one '## Cycle N' heading"
-    OVERALL=1
-    return 1
-  fi
-  echo "  OK"
 }
 
 # Extract YAML frontmatter (between leading --- and closing ---) into stdout.
@@ -274,15 +221,19 @@ validate_agent_config_md() {
   fi
 
   # Required top-level keys (presence; values may be empty arrays).
-  local missing=0
+  local missing_keys=0
   for key in "project_domains" "required_subagents" "recommended_agents"; do
     if ! echo "$fm" | grep -qE "^${key}:"; then
       echo "  FAIL: missing required frontmatter key '${key}'"
-      missing=1
+      missing_keys=1
     fi
   done
+  if [[ "$missing_keys" == "1" ]]; then
+    OVERALL=1
+    return 1
+  fi
 
-  # If a parser is available, do a fuller schema check; else stop at presence.
+  # Deeper schema check via PyYAML if available.
   if command -v python3 >/dev/null 2>&1; then
     if ! python3 - <<'PY' "$f" "$KNOWN_PROJECT_DOMAINS" "$VALID_DOMAIN_RELEVANCE"
 import sys, re, json
@@ -301,7 +252,6 @@ body = m.group(1)
 try:
     import yaml
 except ImportError:
-    # PyYAML unavailable — fall back to presence-only check.
     print("  WARN: PyYAML not installed; agent-config.md schema check is presence-only")
     sys.exit(0)
 
@@ -360,19 +310,16 @@ sys.exit(0)
 PY
     then
       OVERALL=1
-      missing=1
+      return 1
     fi
   fi
 
-  if [[ "$missing" == "0" ]]; then
-    echo "  OK"
-  fi
+  echo "  OK"
 }
 
 validate_state_json() {
-  # F9 (v0.4.x): validate optional `paused` and `pause_history` fields when
-  # present. The rest of state.json is freeform from the orchestrator's POV;
-  # a valid v0.3.x state.json (no paused/pause_history) still validates.
+  # Option D state.json schema: spec_path, current_cycle, phase, light_mode,
+  # quick_mode, cycles{}. Validate the load-bearing fields' shape + enums.
   local f="$1"
   echo "=== validating state.json ==="
   if ! jq -e '.' "$f" >/dev/null 2>&1; then
@@ -381,114 +328,123 @@ validate_state_json() {
     return 1
   fi
 
-  # If `paused` is present, must be a boolean.
-  if jq -e 'has("paused")' "$f" >/dev/null 2>&1; then
-    if ! jq -e '.paused | type == "boolean"' "$f" >/dev/null 2>&1; then
-      echo "  FAIL: state.paused must be a boolean if present" >&2
+  # phase must be a known enum value if present.
+  if jq -e 'has("phase")' "$f" >/dev/null 2>&1; then
+    local phase_ok
+    phase_ok=$(jq --argjson allowed "$VALID_PHASES" '
+      (.phase | type == "string") and (.phase as $p | $allowed | index($p) != null)
+    ' "$f")
+    if [[ "$phase_ok" != "true" ]]; then
+      echo "  FAIL: state.phase must be a string in $VALID_PHASES" >&2
       OVERALL=1
       return 1
     fi
   fi
 
-  # If `pause_history` is present, must be an array; each entry must have
-  # paused_at (string) and reason (string); resumed_at and gate are optional.
-  if jq -e 'has("pause_history")' "$f" >/dev/null 2>&1; then
-    if ! jq -e '.pause_history | type == "array"' "$f" >/dev/null 2>&1; then
-      echo "  FAIL: state.pause_history must be an array if present" >&2
+  # cycles{*}.status must be a known enum if cycles is present.
+  if jq -e 'has("cycles") and (.cycles | type == "object")' "$f" >/dev/null 2>&1; then
+    local bad_statuses
+    bad_statuses=$(jq --argjson allowed "$VALID_CYCLE_STATUS" '
+      [ .cycles | to_entries[] | select(
+          (.value | has("status") | not) or
+          ((.value.status | type) != "string") or
+          (.value.status as $s | $allowed | index($s) == null)
+        ) | .key ]
+    ' "$f")
+    local bad_count
+    bad_count=$(echo "$bad_statuses" | jq 'length')
+    if [[ "$bad_count" != "0" ]]; then
+      echo "  FAIL: cycles entries with bad status: $bad_statuses (allowed: $VALID_CYCLE_STATUS)" >&2
       OVERALL=1
       return 1
     fi
-    local bad
-    bad=$(jq '[.pause_history[]? | select(
-      (has("paused_at") | not) or (.paused_at | type != "string") or (.paused_at == "") or
-      (has("reason") | not) or (.reason | type != "string") or (.reason == "")
-    )] | length' "$f")
-    if [[ "$bad" != "0" ]]; then
-      echo "  FAIL: $bad pause_history entries missing paused_at or reason" >&2
-      OVERALL=1
-      return 1
-    fi
-  fi
-
-  # If both fields are set, paused: true requires at least one history entry.
-  local paused_now history_len
-  paused_now=$(jq -r '.paused // false' "$f" 2>/dev/null)
-  history_len=$(jq -r '.pause_history | length // 0' "$f" 2>/dev/null)
-  if [[ "$paused_now" == "true" && "$history_len" == "0" ]]; then
-    echo "  FAIL: state.paused=true but pause_history is empty (need ≥1 entry naming the gate/reason)" >&2
-    OVERALL=1
-    return 1
   fi
 
   echo "  OK"
 }
 
-validate_scenarios_json() {
+validate_result_json() {
+  # Option D: each cycle child writes result.json with status, cycle_id,
+  # summary, review_clusters before exiting. The outer /goal evaluator reads
+  # status: pass to verdict; forge-status reads review_clusters.{critical,high}.
   local f="$1"
-  echo "=== validating scenarios.json ==="
-  if ! jq -e 'type == "array"' "$f" >/dev/null 2>&1; then
-    echo "  FAIL: not a JSON array" >&2
+  echo "=== validating result.json ==="
+  if ! jq -e 'type == "object"' "$f" >/dev/null 2>&1; then
+    echo "  FAIL: not a JSON object" >&2
     OVERALL=1
     return 1
   fi
-  local bad
-  bad=$(jq --argjson kinds "$VALID_E2E_KINDS" '
-    [ .[] | select(
-        (has("id") | not) or (.id | tostring | test("^E-[0-9]{3}$") | not) or
-        (has("name") | not) or (.name | type != "string") or (.name == "") or
-        (has("kind") | not) or (.kind as $k | $kinds | index($k) == null) or
-        (has("steps") | not) or (.steps | type != "array") or (.steps | length == 0) or
-        (has("expected") | not) or (.expected | type != "string") or (.expected == "")
-      ) | .id // "<missing-id>"
-    ]' "$f")
-  local bad_count total
-  bad_count=$(echo "$bad" | jq 'length')
-  total=$(jq 'length' "$f")
-  if [[ "$bad_count" != "0" ]]; then
-    echo "  FAIL: $bad_count of $total scenarios failed schema check"
-    echo "  Failing IDs: $bad"
-    OVERALL=1
+
+  local missing=0
+  local status
+  status=$(jq -r '.status // ""' "$f" 2>/dev/null || echo "")
+  if [[ "$status" != "pass" && "$status" != "fail" ]]; then
+    echo "  FAIL: status must be \"pass\" or \"fail\" (got: \"$status\")"
+    missing=1
+  fi
+  if ! jq -e 'has("cycle_id") and (.cycle_id | type == "string") and (.cycle_id != "")' "$f" >/dev/null 2>&1; then
+    echo "  FAIL: missing or empty cycle_id (string required)"
+    missing=1
+  fi
+  if ! jq -e 'has("summary") and (.summary | type == "string") and (.summary != "")' "$f" >/dev/null 2>&1; then
+    echo "  FAIL: missing or empty summary"
+    missing=1
+  fi
+  if ! jq -e 'has("review_clusters") and (.review_clusters | type == "object")' "$f" >/dev/null 2>&1; then
+    echo "  FAIL: missing or non-object review_clusters"
+    missing=1
   else
-    echo "  OK ($total scenarios)"
+    if ! jq -e '.review_clusters | has("critical") and (.critical | type == "number")' "$f" >/dev/null 2>&1; then
+      echo "  FAIL: review_clusters.critical must be an integer"
+      missing=1
+    fi
+    if ! jq -e '.review_clusters | has("high") and (.high | type == "number")' "$f" >/dev/null 2>&1; then
+      echo "  FAIL: review_clusters.high must be an integer"
+      missing=1
+    fi
+  fi
+  if [[ "$status" == "pass" ]]; then
+    if ! jq -e '.review_clusters.critical == 0' "$f" >/dev/null 2>&1; then
+      echo "  FAIL: status:pass requires review_clusters.critical == 0"
+      missing=1
+    fi
+  fi
+  if [[ "$missing" == "0" ]]; then
+    echo "  OK"
+  else
+    OVERALL=1
   fi
 }
 
 # Dispatch on target type
 if [[ -f "$TARGET" ]]; then
   case "$(basename "$TARGET")" in
-    subagent-*.json) validate_reviewer "$TARGET" ;;
-    tests.json) validate_tests_json "$TARGET" ;;
-    contract.md) validate_contract_md "$TARGET" ;;
-    plan.md) validate_plan_md "$TARGET" ;;
-    spec.md) validate_spec_md "$TARGET" ;;
-    cycle-plan.md) validate_cycle_plan_md "$TARGET" ;;
-    agent-config.md) validate_agent_config_md "$TARGET" ;;
-    scenarios.json) validate_scenarios_json "$TARGET" ;;
-    state.json) validate_state_json "$TARGET" ;;
-    result.json) validate_result_json "$TARGET" ;;
+    subagent-*.json)  validate_reviewer "$TARGET" ;;
+    tests.json)       validate_tests_json "$TARGET" ;;
+    plan.md)          validate_plan_md "$TARGET" ;;
+    spec.md)          validate_spec_md "$TARGET" ;;
+    agent-config.md)  validate_agent_config_md "$TARGET" ;;
+    state.json)       validate_state_json "$TARGET" ;;
+    result.json)      validate_result_json "$TARGET" ;;
     *) echo "ERROR: don't know how to validate $TARGET" >&2; exit 2 ;;
   esac
 elif [[ -d "$TARGET" ]]; then
-  # Find and validate every recognized artifact in the directory tree
   found_any=0
   while IFS= read -r f; do
     found_any=1
     case "$(basename "$f")" in
-      subagent-*.json) validate_reviewer "$f" ;;
-      tests.json) validate_tests_json "$f" ;;
-      contract.md) validate_contract_md "$f" ;;
-      plan.md) validate_plan_md "$f" ;;
-      spec.md) validate_spec_md "$f" ;;
-      cycle-plan.md) validate_cycle_plan_md "$f" ;;
-      agent-config.md) validate_agent_config_md "$f" ;;
-      scenarios.json) validate_scenarios_json "$f" ;;
-      state.json) validate_state_json "$f" ;;
-      result.json) validate_result_json "$f" ;;
+      subagent-*.json)  validate_reviewer "$f" ;;
+      tests.json)       validate_tests_json "$f" ;;
+      plan.md)          validate_plan_md "$f" ;;
+      spec.md)          validate_spec_md "$f" ;;
+      agent-config.md)  validate_agent_config_md "$f" ;;
+      state.json)       validate_state_json "$f" ;;
+      result.json)      validate_result_json "$f" ;;
     esac
   done < <(find "$TARGET" \( \
-    -name 'subagent-*.json' -o -name 'tests.json' -o -name 'contract.md' \
-    -o -name 'plan.md' -o -name 'spec.md' -o -name 'cycle-plan.md' \
-    -o -name 'agent-config.md' -o -name 'scenarios.json' \
+    -name 'subagent-*.json' -o -name 'tests.json' \
+    -o -name 'plan.md' -o -name 'spec.md' \
+    -o -name 'agent-config.md' \
     -o -name 'state.json' -o -name 'result.json' \
     \) -type f 2>/dev/null)
 

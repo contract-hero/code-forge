@@ -31,6 +31,28 @@ Read in order:
 4. The source files mentioned in any finding's `file` field. You verify
    critical/high findings against the actual code.
 
+### Step 0 — verify reviewer-input completeness
+
+Before clustering, count `subagent-*.json` files actually present in
+`cycles/<id>/reviewers/` and compare against `len(spec.md ## Reviewer
+Config.dimensions)`. If any reviewer is missing or malformed (JSON
+parse fails, root is not an array), do NOT silently continue:
+
+- Re-read the file once in case the write was partial.
+- If still bad/missing, list the dimension(s) you couldn't read in
+  `review.md`'s Methodology section AND emit a synthetic cluster:
+  `severity: high`, `category: tests-vs-impl`,
+  `title: "Reviewer dropout — process-incomplete coverage"`,
+  `description` naming the dropped reviewer(s) and noting that the
+  cycle ran with reduced coverage.
+- The cycle child treats high findings as a `status: fail` indicator
+  only when `critical > 0`; this finding is informational unless
+  reviewer dropout pushed criticals out of view.
+
+Adjust the methodology line at the end of `review.md` to cite the
+*realized* reviewer count, not the configured one. A 6-dimension cycle
+that ran 4 reviewers must say so plainly.
+
 ## Procedure
 
 ### Step 1 — Cluster findings inline

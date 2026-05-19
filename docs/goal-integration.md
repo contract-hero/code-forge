@@ -51,15 +51,26 @@ unexpected re-prompts, and final summary.
    Phase 1.5 Reviewer Config sub-step (model + dimensions), and emits
    `.forge/agent-config.md` for routing hints.
 3. **Cycle loop**: read `.forge/spec.md ## Cycle Plan` and `.forge/state.json`.
-   For each cycle entry whose state is not `pass`:
-   - **Spawn the child session** via Bash:
+   For each cycle entry whose status is not `pass`:
+   - **Spawn the child session** via Bash. The planner mirrors each
+     cycle's `goal_condition` into `state.json.cycles[<id>].goal_condition`
+     at Phase 1f so `jq` reads what the outer session actually invokes:
      ```bash
-     claude -p "$(jq -r '.cycles["<id>"].goal_condition' .forge/state.json)" \
+     CYCLE_GOAL=$(jq -r ".cycles[\"<id>\"].goal_condition // empty" .forge/state.json)
+     [ -z "$CYCLE_GOAL" ] && { echo "spec missing goal_condition for <id>"; exit 1; }
+     claude -p "/goal ${CYCLE_GOAL}" \
        --add-dir .forge \
        --add-dir <cycle's files_affected paths>
      ```
    - **Wait for child exit**. The child writes `cycles/<id>/result.json`
      with `status: pass` or `status: fail` before exiting.
+   - **Detect a child crash**: if the child's exit code is non-zero AND
+     `result.json` does not exist, treat that as `status: fail` and write
+     a synthetic `result.json` (status=`fail`, summary=`"child crashed
+     before writing result.json (exit N)"`) plus a one-line note in
+     transcript so the evaluator sees the failure. Then move on — do NOT
+     loop respawning a crashing child against the K_OUTER budget. The
+     user can re-run with `--resume` after investigating.
    - **Read `result.json`**. Surface it explicitly in the transcript:
      ```
      Cycle C1 child exited. Reading .forge/cycles/C1/result.json:
@@ -101,59 +112,41 @@ claude -p "/goal cycles/<id>/result.json exists with status: pass AND
 
 ### What the cycle child does
 
-The procedure is linear and inline — no separate procedure manual to read,
-no state machine to update mid-cycle. The child reads
-`.forge/spec.md ## Cycle Plan` for its entry (matched by `<id>`), and runs:
+The cycle child reads its entry from `.forge/spec.md ## Cycle Plan`
+(matched by `<id>`) and runs a linear sequence of dispatches + gates.
+Each subagent's behavior is its own contract — see the per-agent .md
+files for the procedure. The cycle child only orchestrates:
 
-1. **Set state**. Write `.forge/state.json` with
-   `{ "current_cycle": "<id>", "phase": "test-list" }`.
-   (forge-guard's anti-weakening rule keys off `phase` later.)
-2. **Dispatch `forge-test-author`** subagent with the cycle plan entry +
-   the spec's acceptance criteria. It writes `tests.json` + the actual
-   test files at the paths listed in `tests.json[*].test_file`.
-3. **Red gate**. Run `bash scripts/cycle-tests-pass.sh red cycles/<id>/ --
-   <project-test-cmd>`. Exit 0 means tests failed correctly (red phase
-   passes); non-zero means tests are tautological — re-dispatch test-author
-   with the trivially-passing test list as feedback.
-4. **Update state**: `phase: "green"`. (forge-guard rule 5 now blocks edits
-   to test-file paths for the rest of the cycle.)
-5. **Dispatch N implementer-workers** in a single assistant turn (parallel
-   `Agent` tool calls). N defaults to 6. Each worker reads the cycle plan
-   entry + `tests.json`, writes a candidate to
-   `cycles/<id>/green/candidates/worker-K/files/<repo-relative-path>`,
-   then emits `manifest.json` with `lines_changed` + `target_files`.
-6. **Score candidates**. For each worker that emitted a manifest:
-   - Stage the candidate into a scratch worktree (`mktemp -d` + rsync).
-   - Run the project's test command against the scratch worktree.
-   - Record `tests_pass: bool` on each candidate's manifest.
-   - Score passers: lower total LOC > fewer files > lower cyclomatic-complexity
-     proxy (`if|for|while|case|catch|&&|\|\|` counts in changed files).
-     Ties broken by lowest worker number.
-   - Pick the lowest-scored passer. Apply via rsync to the actual repo.
-   - If **no candidate passed**, write a no-passer note and let the goal
-     re-prompt with the failure log. The `/goal` evaluator will see
-     "no passer found, retrying" in the transcript and verdict "no".
-7. **Dispatch N reviewers** in a single assistant turn (parallel Agent
-   calls). Read N + model + dimensions from `spec.md ## Reviewer Config`.
-   Pass each reviewer its assigned dimension via the prompt. Each reviewer
-   writes `cycles/<id>/reviewers/subagent-K.json`.
-8. **Dispatch `forge-consolidator`** subagent. It reads every
-   `subagent-*.json`, clusters findings by file+line proximity, verifies
-   critical/high findings against the actual source, and writes
-   `cycles/<id>/review.md`.
-9. **Inspect review.md**. Parse the cluster counts (`critical: N`,
-   `high: N`, etc.) and surface them in the transcript:
-   ```
-   Reviewers complete. Reading cycles/C1/review.md cluster summary:
-     - critical: 0
-     - high: 2
-     - medium: 5
-     - low: 3
-   ```
-10. **Write `cycles/<id>/result.json`** with `status: pass` if critical=0,
-    else `status: fail`. Include `winner_worker`, `summary`, and the
-    `review_clusters` object. Surface the full JSON in the transcript.
-11. **Update state**: `phase: "done"` (cycle-local). Exit.
+1. Write `.forge/state.json` with `current_cycle: "<id>"` and
+   `phase: "test-list"`. forge-guard's anti-weakening rule keys off
+   `phase` later.
+2. Dispatch **`forge-test-author`** — emits `tests.json` + the actual
+   test files at the paths in `test_file`. See `agents/test-author.md`.
+3. Run `bash scripts/cycle-tests-pass.sh red cycles/<id>/ -- <test-cmd>`.
+   Exit 0 means tests failed correctly (red-phase passes); non-zero
+   means tautological — re-dispatch test-author.
+4. Update state to `phase: "green"`. forge-guard now blocks edits to
+   `tests.json`, `state.json`, and any `test_file` path for the rest
+   of the cycle.
+5. Dispatch **6 `forge-implementer-worker`s** in a single assistant
+   turn (parallel `Agent` calls). Each writes a candidate to
+   `cycles/<id>/green/candidates/worker-K/files/`. See
+   `agents/implementer-worker.md`.
+6. Score candidates inline: stage each in a scratch worktree, run the
+   test command, keep passers, pick the simplest (LOC → files →
+   complexity proxy; ties to lowest worker number), apply via rsync.
+   If no candidate passed, narrate the failure and let `/goal`
+   re-prompt.
+7. Dispatch **N `forge-reviewer`s** in a single assistant turn (count,
+   model, and per-reviewer dimension from `spec.md ## Reviewer Config`).
+   See `agents/reviewer.md` for the dimension-to-lens map.
+8. Dispatch **`forge-consolidator`** — clusters reviewer findings inline,
+   verifies critical/high against source, writes `review.md` with a
+   machine-readable Cluster summary block. See `agents/consolidator.md`.
+9. Parse `review.md`'s Cluster summary, surface the counts in
+   transcript, then write `cycles/<id>/result.json` with `status: pass`
+   if critical=0 else `fail`, plus `winner_worker`, `summary`,
+   `review_clusters`. Update state to `phase: "done"`. Exit.
 
 ### What stops the cycle child
 
@@ -190,21 +183,42 @@ counter to maintain; the `or stop after K_child turns` clause is the cap.
   "spec_path": ".forge/spec.md",
   "current_cycle": "C1",
   "phase": "green",
+  "light_mode": false,
+  "quick_mode": false,
   "cycles": {
-    "C1": { "status": "in_progress", "started_at": "2026-05-19T10:00:00Z" },
-    "C2": { "status": "pending" },
-    "C3": { "status": "pending" }
+    "C1": {
+      "status": "in_progress",
+      "started_at": "2026-05-19T10:00:00Z",
+      "goal_condition": "cycles/C1/result.json exists with status: pass AND cycles/C1/review.md has 0 critical clusters, or stop after 30 turns"
+    },
+    "C2": { "status": "pending", "goal_condition": "…" },
+    "C3": { "status": "pending", "goal_condition": "…" }
   }
 }
 ```
 
-Two consumers:
-- **forge-guard** reads `current_cycle` + `phase` to enforce the anti-
-  weakening rule during green.
-- **Outer Claude** reads `cycles[*].status` to pick the next pending cycle.
+Consumers:
+- **forge-guard** reads `current_cycle` + `phase` to enforce the
+  anti-weakening rule during green.
+- **Outer Claude** reads `cycles[*].status` to pick the next pending
+  cycle and `cycles[<id>].goal_condition` to know what `/goal` to set
+  on the spawned child.
 
-The cycle child writes `current_cycle` + `phase` (during its run). The
-outer writes `cycles[<id>].status` after reading each child's `result.json`.
+Writers:
+- `scripts/forge.sh` seeds the initial document (no `phase`, no
+  `goal_condition` — those come later).
+- `forge-planner` mirrors each cycle's `goal_condition` from
+  `spec.md ## Cycle Plan` into `cycles[<id>]` at the end of Phase 1.
+- The cycle child writes `current_cycle` + `phase` during its run.
+- The outer writes `cycles[<id>].status` after each child exits.
+
+Note: a single `phase` field is shared across pre-cycle and per-cycle
+work. forge-guard only blocks on `phase === "green"`, so other values
+are inert from the hook's POV — but the outer Claude should reset
+`phase` to a non-green sentinel (e.g. `"done"` after a cycle, `"plan"`
+between cycles) so a stale `"green"` doesn't carry over into the next
+cycle's pre-test-list window. See R2-002 in the initial review for the
+known tradeoff vs. fully splitting outer/inner state into two files.
 
 ## What `/goal` does NOT replace
 

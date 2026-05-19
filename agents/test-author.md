@@ -118,11 +118,34 @@ Common red-phase failure modes to avoid:
   reports the import error and the script sees non-zero (phase passes
   in the framework's eyes), but the test isn't actually testing
   behavior. Verify the failure is meaningful by reading `red.log`.
+- **Test-runner crash** — the test framework itself errors out
+  (missing config, dep resolution failure, OOM, segfault). Exit is
+  non-zero, the script reports `phase_pass: true`, but zero tests
+  actually ran. `cycle-tests-pass.sh` will print a WARN if it can't
+  find typical failure markers in `red.log` — heed it; read the log
+  and confirm tests really did fail.
+- **No test files emitted** — `tests.json` has entries but the
+  corresponding `test_file` paths weren't written, so the test runner
+  finds nothing matching its discovery globs. Some frameworks exit 0
+  in that case (no tests = "passing run") which inverts to phase fail;
+  others exit non-zero with a "no tests found" message that looks like
+  a real failure. Before invoking `cycle-tests-pass.sh red`, confirm
+  every `test_file` listed in `tests.json` exists and is non-empty.
+- **Test syntax error** — TypeScript/Move/Rust compile error prevents
+  any test from running. Exit non-zero (phase passes), zero tests
+  actually executed. Same mitigation as the crash case: read `red.log`
+  for the framework's "ran N tests, M failed" summary; if the line is
+  absent, the test layer didn't really run.
 - **Trivially-passing test** — `expect(true).toBe(true)`. Tests pass at
   red because there's no real assertion. Script returns non-zero (the
   inversion catches it) and you rewrite.
 - **Assertion against the wrong thing** — the test exercises behavior
   X but asserts on Y. Review your own assertions before running.
+
+After running, confirm `red.log` contains at minimum: every test_file
+loaded successfully, and at least one assertion-failure line per test
+behavior in `tests.json`. The cycle child consults you again with the
+log content if anything looks suspicious.
 
 ## Writing tests well
 

@@ -94,41 +94,6 @@ is a PoC. ~½ page max.>
 > picks the next pending cycle, and spawns one `claude -p` child per
 > cycle.
 
-## /goal Conditions
-
-### Outer goal (top-level invocation)
-
-```text
-claude -p "/goal every cycle id in .forge/spec.md ## Cycle Plan
-       has produced a cycles/<id>/result.json file containing
-       status: pass — as observed in this session's transcript
-       via narration of each child session's exit — or stop
-       after K outer turns"
-```
-
-`K_outer ≈ len(cycles) + 5`.
-
-### Per-cycle child goal
-
-```text
-claude -p "/goal cycles/<id>/result.json exists with
-       status: pass AND cycles/<id>/review.md has 0 critical
-       clusters as surfaced in this transcript,
-       or stop after K_child turns"
-```
-
-`K_child = 30` typical; raise to 50 for known-hard cycles.
-
-### Codex G2.a / G2.b wrappers (planner phase, internal)
-
-```text
-"/goal Codex via codex-bridge has responded AGREE on the latest revision
-       of spec.md, or stop after 3 turns"
-```
-
-Codex stays as the judge — `/goal` just times out the loop after 3
-attempts. Replaces the hand-rolled retry-counter from v0.1.0.
-
 ## Reviewer Config
 
 ```yaml
@@ -148,32 +113,6 @@ dimensions:
   cycle.
 - Want 2 security reviewers? List `security` twice.
 - `model` is passed through to each reviewer's `Agent` dispatch.
-
-## Reviewer Prompt
-
-The cycle child instantiates this template for each entry in
-`dimensions`, substituting `{dimension}` and the per-cycle diff.
-
-```text
-You are a code reviewer for a code-forge cycle.
-
-Your assigned dimension: {dimension}
-
-Read the cycle plan entry (.forge/spec.md ## Cycle Plan, matching the
-cycle id passed in your prompt) for files_affected + acceptance.
-Read tests.json. Read the impl diff. Review specifically through the
-{dimension} lens — see agents/reviewer.md for the dimension-to-lens map.
-
-For each finding, emit JSON per agents/reviewer.md's output schema.
-
-Write your findings to cycles/<id>/reviewers/subagent-<K>.json.
-```
-
-> The consolidator subagent reads all `subagent-*.json`, clusters by
-> file+line proximity (inline, no `_consolidated.json` intermediate),
-> re-verifies critical/high findings against source, and writes the
-> final `cycles/<id>/review.md` with a machine-readable Cluster summary
-> block the cycle child parses.
 
 ---
 
@@ -220,26 +159,3 @@ Writing cycles/C1/result.json:
 The evaluator sees the cluster count and `result.json` content in
 transcript, verdicts the goal cleared.
 
-## result.json schema
-
-```json
-{
-  "cycle_id": "C1",
-  "status": "pass",                        // "pass" | "fail"
-  "summary": "<one-paragraph human summary>",
-  "winner_worker": "W3",                   // best-of-N pick (omit if blocked)
-  "review_clusters": {
-    "critical": 0,
-    "high": 2,
-    "medium": 5,
-    "low": 3,
-    "info": 1
-  },
-  "started_at": "2026-05-19T10:00:00Z",
-  "ended_at":   "2026-05-19T10:24:00Z"
-}
-```
-
-`status: pass` iff `review_clusters.critical == 0` AND the green test
-gate passed. `status: fail` otherwise; the cycle child writes the file
-either way before exiting.

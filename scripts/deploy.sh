@@ -25,8 +25,10 @@ PLUGIN_PATHS=(
   "hooks"
   "scripts"
   "skills"
+  "templates"
+  "docs"
   "tests"
-  "PLUGIN.md"
+  "README.md"
 )
 
 mode="${1:-}"
