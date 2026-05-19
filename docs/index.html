@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Forge — multi-agent build system driven by /goal</title>
+<style>
+  :root {
+    --bg: #faf9f7;
+    --surface: #ffffff;
+    --ink: #1a1a1a;
+    --muted: #6b7280;
+    --rule: #d4d4d4;
+    --accent: #1e3a8a;
+    --accent-bg: #eef2ff;
+    --ok: #15803d;
+    --ok-bg: #ecfdf5;
+    --warn: #c2410c;
+    --warn-bg: #fff7ed;
+    --drop: #9ca3af;
+    --drop-bg: #f3f4f6;
+    --hook: #7c2d12;
+    --hook-bg: #fef2f2;
+    --gate: #4b5563;
+    --gate-bg: #f3f4f6;
+    --code-bg: #f3f4f6;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    margin: 0;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, pre {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  header.hero {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 2rem;
+  }
+  header.hero h1 {
+    font-size: 2.1rem;
+    margin: 0 0 0.5rem;
+    letter-spacing: -0.02em;
+    font-weight: 700;
+  }
+  header.hero .tagline {
+    font-size: 1.1rem;
+    color: var(--muted);
+    margin: 0 0 1.5rem;
+    max-width: 60ch;
+  }
+  header.hero .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+  .pill {
+    display: inline-block;
+    padding: 0.18rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--rule);
+    background: var(--surface);
+    font-size: 0.78rem;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .pill.version { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+  .actions {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 1rem;
+    flex-wrap: wrap;
+  }
+  .btn {
+    display: inline-block;
+    padding: 0.55rem 1rem;
+    border-radius: 5px;
+    text-decoration: none;
+    font-size: 0.93rem;
+    font-weight: 500;
+    border: 1px solid var(--ink);
+    color: var(--ink);
+    background: var(--surface);
+    transition: background 0.15s;
+  }
+  .btn.primary { background: var(--ink); color: var(--surface); }
+  .btn:hover { background: var(--accent-bg); }
+  .btn.primary:hover { background: var(--accent); border-color: var(--accent); }
+  nav.toc {
+    background: var(--surface);
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  nav.toc .inner {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 0.75rem 1.5rem;
+    display: flex;
+    gap: 1.25rem;
+    flex-wrap: wrap;
+    font-size: 0.85rem;
+  }
+  nav.toc a {
+    color: var(--muted);
+    text-decoration: none;
+    font-weight: 500;
+  }
+  nav.toc a:hover { color: var(--accent); }
+  main {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 0 1.5rem 4rem;
+  }
+  section { margin-top: 3rem; scroll-margin-top: 4rem; }
+  h2 {
+    font-size: 1.45rem;
+    margin: 0 0 0.5rem;
+    letter-spacing: -0.01em;
+  }
+  h2 .num {
+    color: var(--muted);
+    font-size: 0.9rem;
+    font-weight: 400;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-right: 0.4rem;
+  }
+  section p.lede {
+    font-size: 1rem;
+    color: var(--muted);
+    margin-top: 0;
+    max-width: 70ch;
+  }
+  h3 {
+    font-size: 1.05rem;
+    margin: 1.75rem 0 0.6rem;
+    color: var(--accent);
+  }
+  p { margin: 0.5rem 0 0.85rem; max-width: 70ch; }
+  ul, ol { padding-left: 1.4rem; max-width: 70ch; }
+  li { margin-bottom: 0.4rem; }
+  code:not(pre code) {
+    background: var(--code-bg);
+    padding: 0.08em 0.4em;
+    border-radius: 3px;
+    font-size: 0.88em;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 0.95rem 1.1rem;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.55;
+  }
+  pre code { background: transparent; padding: 0; font-size: inherit; }
+  figure { margin: 1.25rem 0; }
+  figure svg { display: block; width: 100%; height: auto; max-height: 920px; }
+  figcaption { margin-top: 0.6rem; font-size: 0.83rem; color: var(--muted); text-align: center; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+    margin: 0.8rem 0;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  thead th {
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    background: var(--surface);
+  }
+  td code, th code {
+    background: var(--code-bg);
+    padding: 0.05em 0.35em;
+    border-radius: 3px;
+    font-size: 0.88em;
+  }
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 0.85rem;
+    margin: 1rem 0;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--accent);
+    border-radius: 5px;
+    padding: 0.9rem 1.05rem;
+  }
+  .card h4 {
+    margin: 0 0 0.4rem;
+    font-size: 0.95rem;
+    color: var(--accent);
+  }
+  .card p {
+    margin: 0;
+    font-size: 0.88rem;
+    color: var(--ink);
+  }
+  aside.callout {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--warn);
+    padding: 0.95rem 1.15rem;
+    border-radius: 4px;
+    margin: 1.25rem 0;
+    font-size: 0.93rem;
+  }
+  aside.callout h4 {
+    margin: 0 0 0.4rem;
+    font-size: 0.95rem;
+    color: var(--warn);
+  }
+  aside.callout p { margin: 0 0 0.4rem; }
+  aside.callout p:last-child { margin-bottom: 0; }
+  .legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.75rem;
+    margin: 0.8rem 0 1.5rem;
+  }
+  .legend-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.55rem;
+    padding: 0.55rem 0.75rem;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    font-size: 0.85rem;
+  }
+  .swatch {
+    flex-shrink: 0;
+    width: 18px; height: 18px;
+    border-radius: 4px;
+    border: 1px solid var(--rule);
+    margin-top: 2px;
+  }
+  .swatch.phase  { background: var(--accent-bg); border-color: var(--accent); }
+  .swatch.new    { background: var(--ok-bg);     border-color: var(--ok);     }
+  .swatch.warn   { background: var(--warn-bg);   border-color: var(--warn);   }
+  .swatch.hook   { background: var(--hook-bg);   border-color: var(--hook);   }
+  .swatch.gate   { background: var(--gate-bg);   border-color: var(--gate);   }
+  .legend-item b { font-weight: 600; }
+  .legend-item small { display: block; color: var(--muted); margin-top: 1px; font-size: 0.78rem; }
+  footer.page {
+    max-width: 980px;
+    margin: 4rem auto 2rem;
+    padding: 1.5rem;
+    border-top: 1px solid var(--rule);
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  footer.page a { color: var(--muted); }
+  details {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    margin: 0.7rem 0;
+  }
+  details summary {
+    padding: 0.65rem 0.95rem;
+    cursor: pointer;
+    font-weight: 500;
+    color: var(--accent);
+  }
+  details > *:not(summary) {
+    padding: 0 0.95rem 0.85rem;
+  }
+  details pre {
+    margin: 0 0.95rem 0.95rem;
+  }
+  @media (max-width: 720px) {
+    header.hero { padding: 2rem 0.9rem 1.5rem; }
+    header.hero h1 { font-size: 1.7rem; }
+    main { padding: 0 0.9rem 3rem; }
+    nav.toc .inner { gap: 0.85rem; font-size: 0.8rem; }
+    table { font-size: 0.78rem; }
+    th, td { padding: 0.4rem 0.5rem; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="meta">
+    <span class="pill version">multi-agent build system</span>
+    <span class="pill">/goal-recursive</span>
+    <span class="pill">TDD as a phase</span>
+  </div>
+  <h1>Code Forge</h1>
+  <p class="tagline">
+    Turn a lazy prompt into a shippable PoC through recursive <code>/goal</code> orchestration:
+    a top-level Claude session reads the spec and spawns one <code>claude -p /goal</code>
+    per cycle. Each cycle runs best-of-N implementer workers, configurable dimensional reviewers,
+    and a consolidator. One hook keeps test files read-only during green phase so the
+    <code>/goal</code> evaluator can't talk a worker into weakening the suite.
+  </p>
+  <div class="actions">
+    <a class="btn primary" href="https://github.com/alilloig/code-forge">View on GitHub</a>
+    <a class="btn" href="#quick-start">Quick start</a>
+    <a class="btn" href="#architecture">Architecture</a>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <div class="inner">
+    <a href="#what-it-does">What it does</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#per-cycle">Per-cycle detail</a>
+    <a href="#reviewers">Configurable review</a>
+    <a href="#hook">The one hook</a>
+    <a href="#spec-md">spec.md</a>
+    <a href="#quick-start">Quick start</a>
+    <a href="#further-reading">Further reading</a>
+  </div>
+</nav>
+
+<main>
+
+<section id="what-it-does">
+  <h2><span class="num">01</span>What it does</h2>
+  <p class="lede">
+    Code Forge solves the three failure modes of multi-agent code generation —
+    protocol drift, reviewer blind spots, and tautological tests — by making
+    each one a structural property of the run rather than a prompt-level
+    hope.
+  </p>
+  <div class="card-grid">
+    <div class="card">
+      <h4>TDD as a phase</h4>
+      <p>A dedicated test-author writes tests before any implementer touches code. <code>cycle-tests-pass.sh red</code> inverts exit codes so tautological tests fail the gate.</p>
+    </div>
+    <div class="card">
+      <h4>Best-of-N implementer</h4>
+      <p>6 Sonnet workers dispatched in a single turn produce independent candidates; the cycle child scores them by LOC + files + complexity and applies the simplest passer.</p>
+    </div>
+    <div class="card">
+      <h4>Dimensional review</h4>
+      <p>N reviewers (count, model, dimensions all picked in <code>spec.md</code>) cover a curated lens menu — correctness, design, simplicity, security, more. A consolidator clusters, verifies, ships <code>review.md</code>.</p>
+    </div>
+    <div class="card">
+      <h4><code>/goal</code>-recursive orchestration</h4>
+      <p>An outer Claude session reads <code>spec.md ## Cycle Plan</code> and spawns one <code>claude -p /goal</code> child per cycle. Session boundaries sidestep the one-goal-per-session limit.</p>
+    </div>
+    <div class="card">
+      <h4>Anti-weakening hook</h4>
+      <p>Test files (plus the <code>state.json</code>/<code>tests.json</code> anchors) are read-only during green. Without it <code>/goal "tests pass"</code> would mutate tests instead of the implementation.</p>
+    </div>
+    <div class="card">
+      <h4>Codex cross-checks</h4>
+      <p>G2.a (spec ↔ plan) and G2.b (spec ↔ e2e) gates round-trip through Codex via <code>codex-bridge</code> as independent second-opinion judges.</p>
+    </div>
+  </div>
+</section>
+
+<section id="architecture">
+  <h2><span class="num">02</span>The <code>/goal</code>-recursive architecture</h2>
+  <p>
+    Code Forge runs as two nested goal sessions joined at process boundaries.
+    The outer session manages cycle progression; each cycle child manages the
+    inside of one cycle. Both sessions get their own Haiku evaluator that
+    judges the <code>/goal</code> condition after every turn.
+  </p>
+
+  <figure>
+    <svg viewBox="0 0 920 320" role="img" aria-label="Outer Claude session spawns per-cycle claude -p /goal children sequentially">
+      <defs>
+        <marker id="arr-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="#15803d"/>
+        </marker>
+        <marker id="arr-step" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="#1e3a8a"/>
+        </marker>
+      </defs>
+
+      <!-- User invocation -->
+      <rect x="20" y="20" width="200" height="60" rx="6" fill="#eef2ff" stroke="#1e3a8a"/>
+      <text x="120" y="42" text-anchor="middle" font-size="13" font-weight="600" fill="#1e3a8a">User invocation</text>
+      <text x="120" y="60" text-anchor="middle" font-size="11" fill="#1a1a1a">bash scripts/forge.sh</text>
+      <text x="120" y="74" text-anchor="middle" font-size="11" fill="#1a1a1a">"task description"</text>
+
+      <line x1="223" y1="50" x2="248" y2="50" stroke="#15803d" stroke-width="1.8" marker-end="url(#arr-flow)"/>
+
+      <!-- Outer goal session -->
+      <rect x="251" y="10" width="649" height="180" rx="8" fill="#ecfdf5" stroke="#15803d" stroke-width="2"/>
+      <text x="575.5" y="34" text-anchor="middle" font-size="14" font-weight="700" fill="#15803d">OUTER /goal SESSION</text>
+      <text x="575.5" y="52" text-anchor="middle" font-size="11" fill="#15803d">claude -p "/goal every cycle has cycles/&lt;id&gt;/result.json status:pass, or stop after K turns"</text>
+
+      <!-- Outer steps -->
+      <rect x="270" y="65" width="180" height="60" rx="5" fill="#fff" stroke="#15803d"/>
+      <text x="360" y="82" text-anchor="middle" font-size="11" font-weight="600" fill="#15803d">Phase 0/1 (outer)</text>
+      <text x="360" y="98" text-anchor="middle" font-size="9.5" fill="#15803d">claudex + dispatch planner</text>
+      <text x="360" y="111" text-anchor="middle" font-size="9.5" fill="#15803d">→ spec.md + state.json</text>
+
+      <line x1="453" y1="95" x2="475" y2="95" stroke="#15803d" stroke-width="1.5" marker-end="url(#arr-flow)"/>
+
+      <rect x="478" y="65" width="200" height="60" rx="5" fill="#fff" stroke="#15803d"/>
+      <text x="578" y="82" text-anchor="middle" font-size="11" font-weight="600" fill="#15803d">Pick next cycle</text>
+      <text x="578" y="98" text-anchor="middle" font-size="9.5" fill="#15803d">read state.json — status:pending</text>
+      <text x="578" y="111" text-anchor="middle" font-size="9.5" fill="#15803d">read goal_condition from state</text>
+
+      <line x1="681" y1="95" x2="703" y2="95" stroke="#15803d" stroke-width="1.5" marker-end="url(#arr-flow)"/>
+
+      <rect x="706" y="65" width="178" height="60" rx="5" fill="#fff" stroke="#15803d"/>
+      <text x="795" y="82" text-anchor="middle" font-size="11" font-weight="600" fill="#15803d">Spawn cycle child</text>
+      <text x="795" y="98" text-anchor="middle" font-size="9.5" fill="#15803d">Bash: claude -p /goal ...</text>
+      <text x="795" y="111" text-anchor="middle" font-size="9.5" fill="#15803d">wait for exit + result.json</text>
+
+      <!-- Loop arrow back from spawn to pick -->
+      <path d="M 795 128 C 795 155 575 158 575 128" fill="none" stroke="#15803d" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <text x="660" y="155" text-anchor="middle" font-size="9.5" fill="#15803d">loop until every cycle is pass</text>
+      <polygon points="572,128 580,123 580,133" fill="#15803d"/>
+
+      <text x="575.5" y="180" text-anchor="middle" font-size="10" fill="#15803d">Haiku evaluator reads transcript after every outer turn — verdicts "yes" once all cycles pass</text>
+
+      <!-- Cycle child sessions -->
+      <rect x="80" y="220" width="180" height="80" rx="6" fill="#eef2ff" stroke="#1e3a8a" stroke-width="2"/>
+      <text x="170" y="240" text-anchor="middle" font-size="11" font-weight="600" fill="#1e3a8a">cycle child #1</text>
+      <text x="170" y="258" text-anchor="middle" font-size="10" fill="#1a1a1a">claude -p /goal</text>
+      <text x="170" y="272" text-anchor="middle" font-size="10" fill="#1a1a1a">(cycle C1)</text>
+      <text x="170" y="290" text-anchor="middle" font-size="9.5" fill="#6b7280">see per-cycle detail ↓</text>
+
+      <rect x="280" y="220" width="180" height="80" rx="6" fill="#eef2ff" stroke="#1e3a8a" stroke-width="2"/>
+      <text x="370" y="240" text-anchor="middle" font-size="11" font-weight="600" fill="#1e3a8a">cycle child #2</text>
+      <text x="370" y="258" text-anchor="middle" font-size="10" fill="#1a1a1a">claude -p /goal</text>
+      <text x="370" y="272" text-anchor="middle" font-size="10" fill="#1a1a1a">(cycle C2)</text>
+      <text x="370" y="290" text-anchor="middle" font-size="9.5" fill="#6b7280">sequential, after C1</text>
+
+      <rect x="480" y="220" width="180" height="80" rx="6" fill="#eef2ff" stroke="#1e3a8a" stroke-width="2"/>
+      <text x="570" y="240" text-anchor="middle" font-size="11" font-weight="600" fill="#1e3a8a">cycle child #3</text>
+      <text x="570" y="258" text-anchor="middle" font-size="10" fill="#1a1a1a">claude -p /goal</text>
+      <text x="570" y="272" text-anchor="middle" font-size="10" fill="#1a1a1a">(cycle C3)</text>
+      <text x="570" y="290" text-anchor="middle" font-size="9.5" fill="#6b7280">(final cycle has e2e)</text>
+
+      <rect x="680" y="220" width="180" height="80" rx="6" fill="#eef2ff" stroke="#1e3a8a" stroke-width="2"/>
+      <text x="770" y="240" text-anchor="middle" font-size="11" font-weight="600" fill="#1e3a8a">cycle child #N</text>
+      <text x="770" y="258" text-anchor="middle" font-size="10" fill="#1a1a1a">claude -p /goal</text>
+      <text x="770" y="272" text-anchor="middle" font-size="10" fill="#1a1a1a">(cycle CN)</text>
+      <text x="770" y="290" text-anchor="middle" font-size="9.5" fill="#6b7280">N from spec.md</text>
+
+      <!-- Arrows from outer to children -->
+      <line x1="170" y1="220" x2="170" y2="200" stroke="#15803d" stroke-width="1.5" stroke-dasharray="3 2" marker-end="url(#arr-flow)"/>
+      <line x1="370" y1="220" x2="370" y2="200" stroke="#15803d" stroke-width="1.5" stroke-dasharray="3 2" marker-end="url(#arr-flow)"/>
+      <line x1="570" y1="220" x2="570" y2="200" stroke="#15803d" stroke-width="1.5" stroke-dasharray="3 2" marker-end="url(#arr-flow)"/>
+      <line x1="770" y1="220" x2="770" y2="200" stroke="#15803d" stroke-width="1.5" stroke-dasharray="3 2" marker-end="url(#arr-flow)"/>
+    </svg>
+    <figcaption>The outer Claude session reads <code>spec.md</code>, picks the next pending cycle, spawns a child, narrates the result. Repeat until every cycle status is pass.</figcaption>
+  </figure>
+
+  <aside class="callout">
+    <h4>Why this works</h4>
+    <p>
+      <code>/goal</code> is one-goal-per-session by design. <strong>Session boundaries sidestep the limit.</strong>
+      Each <code>claude -p</code> spawns a fresh session with its own evaluator,
+      enabling recursive goal-driven execution without violating the documented constraint.
+    </p>
+  </aside>
+</section>
+
+<section id="per-cycle">
+  <h2><span class="num">03</span>Inside a cycle child</h2>
+  <p class="lede">
+    Each cycle is one <code>claude -p /goal</code> session whose condition
+    is <em>"<code>result.json</code> exists with <code>status: pass</code>
+    AND <code>review.md</code> has 0 critical clusters"</em>. The child
+    runs a linear sequence of dispatches + gates inline; <code>/goal</code>
+    handles re-prompting on failure.
+  </p>
+
+  <h3>Legend</h3>
+  <div class="legend">
+    <div class="legend-item"><span class="swatch phase"></span><div><b>Phase / subagent</b><small>Step in the cycle. Some are inline, some are Agent dispatches.</small></div></div>
+    <div class="legend-item"><span class="swatch warn"></span><div><b>Best-of-N / fan-out</b><small>Parallel Agent dispatches in a single turn.</small></div></div>
+    <div class="legend-item"><span class="swatch hook"></span><div><b>forge-guard rule 5</b><small>The one hook. Test files + anchors read-only during green.</small></div></div>
+    <div class="legend-item"><span class="swatch gate"></span><div><b>Script gate</b><small>cycle-tests-pass.sh red/green truth gate.</small></div></div>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 880 920" role="img" aria-label="Cycle child: entry → test-author → red gate → 6 workers → score → reviewers → consolidator → result.json">
+      <defs>
+        <marker id="arr-cycle" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="#1e3a8a"/>
+        </marker>
+      </defs>
+
+      <!-- Entry -->
+      <rect x="120" y="20" width="640" height="64" rx="8" fill="#ecfdf5" stroke="#15803d" stroke-width="2"/>
+      <text x="440" y="42" text-anchor="middle" font-size="14" font-weight="700" fill="#15803d">CYCLE CHILD ENTRY</text>
+      <text x="440" y="60" text-anchor="middle" font-size="11" fill="#15803d">claude -p "/goal cycles/&lt;id&gt;/result.json status:pass AND</text>
+      <text x="440" y="75" text-anchor="middle" font-size="11" fill="#15803d">review.md has 0 critical clusters, or stop after 30 turns"</text>
+
+      <line x1="440" y1="86" x2="440" y2="106" stroke="#1e3a8a" stroke-width="1.5" marker-end="url(#arr-cycle)"/>
+
+      <!-- 1. test-author -->
+      <rect x="290" y="110" width="300" height="60" rx="6" fill="#eef2ff" stroke="#1e3a8a"/>
+      <text x="440" y="132" text-anchor="middle" font-size="13" font-weight="600" fill="#1e3a8a">1. test-author (subagent)</text>
+      <text x="440" y="150" text-anchor="middle" font-size="11" fill="#1a1a1a">writes tests.json + actual test files</text>
+      <text x="440" y="164" text-anchor="middle" font-size="10" fill="#6b7280">covers cycle's acceptance criteria + e2e (final cycle)</text>
+
+      <line x1="440" y1="172" x2="440" y2="192" stroke="#1e3a8a" stroke-width="1.5" marker-end="url(#arr-cycle)"/>
+
+      <!-- 2. red gate -->
+      <rect x="290" y="195" width="300" height="60" rx="6" fill="#f3f4f6" stroke="#4b5563"/>
+      <text x="440" y="217" text-anchor="middle" font-size="13" font-weight="600" fill="#4b5563">2. red gate</text>
+      <text x="440" y="235" text-anchor="middle" font-size="11" fill="#1a1a1a">cycle-tests-pass.sh red (inverted exit)</text>
+      <text x="440" y="250" text-anchor="middle" font-size="10" fill="#6b7280">tests must FAIL → tautology detector</text>
+
+      <line x1="440" y1="257" x2="440" y2="277" stroke="#1e3a8a" stroke-width="1.5" marker-end="url(#arr-cycle)"/>
+
+      <!-- Hook band -->
+      <rect x="200" y="282" width="480" height="22" rx="4" fill="#fef2f2" stroke="#7c2d12"/>
+      <text x="440" y="297" text-anchor="middle" font-size="11" font-weight="600" fill="#7c2d12">▼ forge-guard rule 5 active — tests + anchors read-only ▼</text>
+
+      <line x1="440" y1="306" x2="440" y2="326" stroke="#1e3a8a" stroke-width="1.5" marker-end="url(#arr-cycle)"/>
+
+      <!-- 3. Best-of-N -->
+      <rect x="120" y="330" width="640" height="140" rx="8" fill="#eef2ff" stroke="#1e3a8a" stroke-width="2"/>
+      <text x="440" y="354" text-anchor="middle" font-size="13" font-weight="600" fill="#1e3a8a">3. 6 implementer-workers (parallel, single turn)</text>
+
+      <g>
+        <rect x="155" y="370" width="80" height="44" rx="4" fill="#fff7ed" stroke="#c2410c"/><text x="195" y="388" text-anchor="middle" font-size="11" font-weight="600" fill="#c2410c">W1</text><text x="195" y="404" text-anchor="middle" font-size="9" fill="#c2410c">candidate</text>
+        <rect x="245" y="370" width="80" height="44" rx="4" fill="#fff7ed" stroke="#c2410c"/><text x="285" y="388" text-anchor="middle" font-size="11" font-weight="600" fill="#c2410c">W2</text><text x="285" y="404" text-anchor="middle" font-size="9" fill="#c2410c">candidate</text>
+        <rect x="335" y="370" width="80" height="44" rx="4" fill="#fff7ed" stroke="#c2410c"/><text x="375" y="388" text-anchor="middle" font-size="11" font-weight="600" fill="#c2410c">W3</text><text x="375" y="404" text-anchor="middle" font-size="9" fill="#c2410c">candidate</text>
+        <rect x="425" y="370" width="80" height="44" rx="4" fill="#fff7ed" stroke="#c2410c"/><text x="465" y="388" text-anchor="middle" font-size="11" font-weight="600" fill="#c2410c">W4</text><text x="465" y="404" text-anchor="middle" font-size="9" fill="#c2410c">candidate</text>
+        <rect x="515" y="370" width="80" height="44" rx="4" fill="#fff7ed" stroke="#c2410c"/><text x="555" y="388" text-anchor="middle" font-size="11" font-weight="600" fill="#c2410c">W5</text><text x="555" y="404" text-anchor="middle" font-size="9" fill="#c2410c">candidate</text>
+        <rect x="605" y="370" width="80" height="44" rx="4" fill="#fff7ed" stroke="#c2410c"/><text x="645" y="388" text-anchor="middle" font-size="11" font-weight="600" fill="#c2410c">W6</text><text x="645" y="404" text-anchor="middle" font-size="9" fill="#c2410c">candidate</text>
+      </g>
+      <text x="440" y="435" text-anchor="middle" font-size="10.5" fill="#1a1a1a">4. score (LOC + files + complexity proxy), pick simplest passer, apply</text>
+      <text x="440" y="452" text-anchor="middle" font-size="10" fill="#6b7280">cycle-tests-pass.sh green must exit 0 for the winner</text>
+
+      <line x1="440" y1="472" x2="440" y2="492" stroke="#1e3a8a" stroke-width="1.5" marker-end="url(#arr-cycle)"/>
+
+      <!-- 5. Reviewers (configurable) -->
+      <rect x="120" y="495" width="640" height="140" rx="8" fill="#eef2ff" stroke="#1e3a8a" stroke-width="2"/>
+      <text x="440" y="519" text-anchor="middle" font-size="13" font-weight="600" fill="#1e3a8a">5. N reviewers (parallel, single turn)</text>
+      <text x="440" y="535" text-anchor="middle" font-size="10" fill="#6b7280">N = len(spec.md ## Reviewer Config.dimensions) · model = opus | sonnet</text>
+
+      <g>
+        <rect x="155" y="548" width="115" height="44" rx="4" fill="#fff7ed" stroke="#c2410c"/><text x="212.5" y="566" text-anchor="middle" font-size="10" font-weight="600" fill="#c2410c">R1</text><text x="212.5" y="582" text-anchor="middle" font-size="9" fill="#c2410c">correctness ★</text>
+        <rect x="280" y="548" width="115" height="44" rx="4" fill="#fff7ed" stroke="#c2410c"/><text x="337.5" y="566" text-anchor="middle" font-size="10" font-weight="600" fill="#c2410c">R2</text><text x="337.5" y="582" text-anchor="middle" font-size="9" fill="#c2410c">simplicity ★</text>
+        <rect x="405" y="548" width="115" height="44" rx="4" fill="#fff7ed" stroke="#c2410c"/><text x="462.5" y="566" text-anchor="middle" font-size="10" font-weight="600" fill="#c2410c">R3</text><text x="462.5" y="582" text-anchor="middle" font-size="9" fill="#c2410c">security ★</text>
+        <rect x="530" y="548" width="200" height="44" rx="4" fill="#ecfdf5" stroke="#15803d" stroke-dasharray="3 2"/><text x="630" y="566" text-anchor="middle" font-size="10" font-weight="600" fill="#15803d">R4..RN (configurable)</text><text x="630" y="582" text-anchor="middle" font-size="9" fill="#15803d">any Tier 1/2 dim, duplicates OK</text>
+      </g>
+      <text x="440" y="613" text-anchor="middle" font-size="10" fill="#6b7280">★ default trio (PoC-tuned). Pick from 12 dimensions in planner Phase 1.5.</text>
+
+      <line x1="440" y1="635" x2="440" y2="655" stroke="#1e3a8a" stroke-width="1.5" marker-end="url(#arr-cycle)"/>
+
+      <!-- 6. consolidator -->
+      <rect x="270" y="658" width="340" height="60" rx="6" fill="#f3f4f6" stroke="#4b5563"/>
+      <text x="440" y="680" text-anchor="middle" font-size="12" font-weight="600" fill="#4b5563">6. consolidator (subagent)</text>
+      <text x="440" y="697" text-anchor="middle" font-size="10" fill="#4b5563">cluster · verify critical/high · write review.md</text>
+      <text x="440" y="710" text-anchor="middle" font-size="9" fill="#4b5563">step 0: count reviewer dropouts; flag if any missing</text>
+
+      <line x1="440" y1="720" x2="440" y2="740" stroke="#1e3a8a" stroke-width="1.5" marker-end="url(#arr-cycle)"/>
+
+      <!-- 7. result.json -->
+      <rect x="270" y="743" width="340" height="60" rx="6" fill="#ecfdf5" stroke="#15803d" stroke-width="2"/>
+      <text x="440" y="765" text-anchor="middle" font-size="13" font-weight="600" fill="#15803d">7. write result.json</text>
+      <text x="440" y="783" text-anchor="middle" font-size="11" fill="#15803d">{ status: pass | fail, summary, review_clusters }</text>
+      <text x="440" y="797" text-anchor="middle" font-size="10" fill="#15803d">THE gate — outer /goal evaluator reads status</text>
+
+      <line x1="440" y1="805" x2="440" y2="825" stroke="#1e3a8a" stroke-width="1.5" marker-end="url(#arr-cycle)"/>
+
+      <!-- Exit -->
+      <text x="440" y="847" text-anchor="middle" font-size="11" fill="#15803d">Cycle child exits. /goal evaluator clears if status:pass + 0 critical;</text>
+      <text x="440" y="863" text-anchor="middle" font-size="11" fill="#15803d">re-prompts cycle child if not (built-in retry behavior).</text>
+      <text x="440" y="888" text-anchor="middle" font-size="11" fill="#6b7280">Outer Claude reads result.json, narrates "cycle &lt;id&gt; status=pass",</text>
+      <text x="440" y="904" text-anchor="middle" font-size="11" fill="#6b7280">outer Haiku evaluator sees it in transcript, moves to next cycle.</text>
+    </svg>
+    <figcaption>One cycle child. <strong>Test-author + consolidator are subagents</strong> (focused prompts own schema discipline + cluster verification). <strong>Workers + reviewers are inline Agent dispatches</strong> — count, model, and per-reviewer dimension all read from <code>spec.md</code>.</figcaption>
+  </figure>
+</section>
+
+<section id="reviewers">
+  <h2><span class="num">04</span>Configurable dimensional review</h2>
+  <p>
+    Each cycle's reviewer fan-out is parameterized at spec-authoring time. The planner runs an interactive <strong>Phase 1.5</strong> sub-step asking for the model + dimensions and writes the result into <code>spec.md ## Reviewer Config</code>:
+  </p>
+
+  <pre><code>## Reviewer Config
+model: opus            # or sonnet
+dimensions:
+  - correctness        # ★ default trio
+  - simplicity         # ★ default trio
+  - security           # ★ default trio</code></pre>
+
+  <p>
+    The <strong>length of the <code>dimensions</code> list IS the reviewer count</strong> — no separate <code>count:</code> field, no validation mismatch. Want two security reviewers? List <code>security</code> twice.
+  </p>
+
+  <h3>Curated dimension menu</h3>
+
+  <table>
+    <thead>
+      <tr><th>Tier</th><th>Dimension</th><th>What it covers</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1 ★</td><td><code>correctness</code></td><td>Does the code do what spec says? Off-by-one, type confusions, hidden behaviors.</td></tr>
+      <tr><td>1</td><td><code>design</code></td><td>Module boundaries, separation of concerns, naming clarity.</td></tr>
+      <tr><td>1</td><td><code>error-handling</code></td><td>Silent failures, swallowed exceptions, missing error paths.</td></tr>
+      <tr><td>1 ★</td><td><code>simplicity</code></td><td>Accidental complexity, premature abstraction, dead code.</td></tr>
+      <tr><td>1</td><td><code>tests-vs-impl</code></td><td>Tautology hunting — do tests actually exercise the impl?</td></tr>
+      <tr><td>1 ★</td><td><code>security</code></td><td>Real vuln classes — auth gaps, input validation, capability leaks.</td></tr>
+      <tr><td>2</td><td><code>performance</code></td><td>Algorithmic complexity, obvious bottlenecks.</td></tr>
+      <tr><td>2</td><td><code>naming-readability</code></td><td>Names communicate intent; code reads top-to-bottom.</td></tr>
+      <tr><td>2</td><td><code>dependency-hygiene</code></td><td>Unused / outdated / vulnerable deps.</td></tr>
+      <tr><td>2</td><td><code>type-safety</code></td><td>Type contracts at boundaries; no <code>any</code> escape hatches.</td></tr>
+      <tr><td>2</td><td><code>concurrency</code></td><td>Race conditions, shared mutable state.</td></tr>
+      <tr><td>2</td><td><code>observability</code></td><td>Logging, error surfacing, debuggability.</td></tr>
+      <tr><td>3</td><td><code>sui-move-idioms</code></td><td>Move 2024 conventions, ability usage, object capability patterns.</td></tr>
+      <tr><td>3</td><td><code>frontend-a11y</code></td><td>ARIA, semantic markup, keyboard nav, contrast.</td></tr>
+      <tr><td>3</td><td><code>api-contract-stability</code></td><td>Backwards compatibility, deprecation, breaking-change risk.</td></tr>
+    </tbody>
+  </table>
+
+  <p style="font-size: 0.88rem; color: var(--muted); margin-top: 0.6rem;">
+    ★ = the default trio shown selected when the planner first opens the picker. Tier 3 dimensions are declared per-project (not in the default menu).
+  </p>
+</section>
+
+<section id="hook">
+  <h2><span class="num">05</span>The one hook</h2>
+  <p class="lede">
+    Code Forge ships exactly one PreToolUse hook: the test-immutability
+    rule. Without it, <code>/goal "tests pass"</code> would happily mutate
+    the tests instead of the implementation — the evaluator can only see
+    what's in the transcript and cannot diff against a baseline.
+  </p>
+
+  <aside class="callout">
+    <h4>What the hook blocks during green phase</h4>
+    <ul>
+      <li><strong>Edit / Write</strong> to any path listed in the current cycle's <code>tests.json[*].test_file</code>.</li>
+      <li><strong>Edit / Write</strong> to <code>.forge/state.json</code> or <code>.forge/cycles/&lt;id&gt;/tests.json</code> themselves — without this, a worker could rewrite either to disarm the rule with one Edit.</li>
+      <li><strong>Bash</strong> file-writes that resolve to any of the above — covering <code>&gt;</code>, <code>&gt;&gt;</code>, <code>&amp;&gt;</code>, <code>&gt;|</code>, <code>2&gt;</code>, <code>| tee</code>, <code>cp</code>, <code>mv</code>, <code>install</code>, <code>cp -t &lt;dir&gt;</code>, GNU + BSD <code>sed -i</code>, <code>perl -i</code>, <code>ruby -i</code>, <code>awk -i inplace</code>, <code>python -c open(…, "w")</code>, <code>dd of=</code>, <code>truncate</code>, <code>ln -sf</code>, <code>rm</code>, and any <code>sh -c</code> / <code>bash -c</code> / <code>eval</code> / here-string invocation referencing those paths.</li>
+    </ul>
+    <p>The hook is fail-closed: any unexpected error (malformed JSON, internal exception, etc.) exits 2 with a diagnostic instead of letting the tool call through.</p>
+  </aside>
+
+  <h3>Worker candidate-staging is also covered</h3>
+  <p>
+    Best-of-N workers stage candidates under <code>.forge/cycles/&lt;id&gt;/green/candidates/worker-K/files/&lt;repo-relative-path&gt;</code>. The hook peels that prefix so a write to a staged copy of a test file still trips.
+  </p>
+</section>
+
+<section id="spec-md">
+  <h2><span class="num">06</span><code>spec.md</code> — the single artifact</h2>
+  <p>
+    Everything per-project lives in one file. The planner emits it during Phase 1; the outer session and every cycle child read it.
+  </p>
+
+  <ul>
+    <li><code># &lt;Project Name&gt;</code> + <code>## Vision</code> — what + why</li>
+    <li><code>## Target Users</code></li>
+    <li><code>## Acceptance Criteria</code> — observable behaviors with <code>AC-NNN</code> ids</li>
+    <li><code>## Architecture</code> — concise, ~½ page max</li>
+    <li><code>## Out of Scope</code></li>
+    <li><code>## E2E Tests</code> — YAML scenarios that the final cycle's tests cover</li>
+    <li><code>## Cycle Plan</code> — sequential YAML list, each entry has <code>id</code>, <code>goal</code>, <code>files_affected</code>, <code>acceptance</code>, <code>goal_condition</code></li>
+    <li><code>## Reviewer Config</code> — <code>model</code> + <code>dimensions</code> list</li>
+  </ul>
+
+  <details>
+    <summary>Example <code>## Cycle Plan</code> entry</summary>
+    <pre><code>- id: C1
+  goal: implement the user storage layer
+  files_affected:
+    - src/storage/users.ts
+    - src/storage/types.ts
+  acceptance: [AC-001]
+  goal_condition: |
+    cycles/C1/result.json exists with status: pass AND
+    cycles/C1/review.md has 0 critical clusters,
+    or stop after 30 turns</code></pre>
+  </details>
+
+  <details>
+    <summary>Example <code>result.json</code> from a passing cycle</summary>
+    <pre><code>{
+  "cycle_id": "C1",
+  "status": "pass",
+  "summary": "all tests pass; 0 critical findings",
+  "winner_worker": "W3",
+  "review_clusters": {
+    "critical": 0,
+    "high": 2,
+    "medium": 5,
+    "low": 3,
+    "info": 0
+  },
+  "started_at": "2026-05-19T10:00:00Z",
+  "ended_at":   "2026-05-19T10:24:00Z"
+}</code></pre>
+  </details>
+</section>
+
+<section id="quick-start">
+  <h2><span class="num">07</span>Quick start</h2>
+
+  <h3>From a terminal</h3>
+  <pre><code># Top-level launcher (or invoke /forge from inside Claude Code)
+bash scripts/forge.sh "Build a CLI that counts source lines"
+
+# Skip Phase 0 claudex refinement for trivial tasks
+bash scripts/forge.sh "Add a --json flag to my CLI" --quick
+
+# Skip the optional G2.5 Codex gate (cost savings)
+bash scripts/forge.sh "&lt;description&gt;" --light
+
+# Resume a previous run (allows reuse of an existing .forge/)
+bash scripts/forge.sh "&lt;description&gt;" --resume</code></pre>
+
+  <h3>From Claude Code</h3>
+  <pre><code>/forge "Build a real-time task management app with WebSocket collaboration"</code></pre>
+
+  <h3>Requirements</h3>
+  <ul>
+    <li><strong>Claude Code v2.1.139+</strong> — <code>/goal</code> is required.</li>
+    <li><strong><code>codex-bridge</code> plugin</strong> — provides the Codex MCP tools used by G2.a / G2.b / G2.5.</li>
+    <li><strong>Hooks enabled</strong> — <code>disableAllHooks: false</code> in settings (the default). Rule 5 is the only anti-cheat invariant left; if it's disabled, <code>/goal "tests pass"</code> will reliably weaken tests.</li>
+    <li><strong><code>jq</code> + <code>node</code></strong> in <code>PATH</code> — used by <code>cycle-validate.sh</code> and <code>forge-guard.mjs</code>.</li>
+  </ul>
+</section>
+
+<section id="further-reading">
+  <h2><span class="num">08</span>Further reading</h2>
+  <ul>
+    <li><a href="https://github.com/alilloig/code-forge"><strong>GitHub repo</strong></a> — source of truth</li>
+    <li><a href="https://github.com/alilloig/code-forge/blob/main/docs/goal-integration.md">docs/goal-integration.md</a> — full protocol (outer + cycle child procedures)</li>
+    <li><a href="https://github.com/alilloig/code-forge/blob/main/templates/spec.md.template">templates/spec.md.template</a> — copy-pasteable spec skeleton</li>
+    <li><a href="https://github.com/alilloig/code-forge/blob/main/agents/">agents/</a> — per-agent prompts (planner, test-author, implementer-worker, reviewer, consolidator)</li>
+    <li><a href="https://github.com/alilloig/code-forge/blob/main/hooks/forge-guard.mjs">hooks/forge-guard.mjs</a> — the surviving rule</li>
+    <li><a href="https://github.com/alilloig/code-forge/blob/main/tests/smoke.sh">tests/smoke.sh</a> — the plugin's self-test (90 assertions)</li>
+  </ul>
+</section>
+
+</main>
+
+<footer class="page">
+  <p>
+    Code Forge — multi-agent build system with <code>/goal</code>-recursive orchestration,
+    best-of-N implementer, and configurable dimensional review. Parallel-review pattern
+    adopted from <a href="https://github.com/alilloig/sui-pilot">sui-pilot</a>'s
+    <code>move-pr-review</code> skill.
+  </p>
+  <p>
+    Source: <a href="https://github.com/alilloig/code-forge">github.com/alilloig/code-forge</a>
+  </p>
+</footer>
+
+</body>
+</html>

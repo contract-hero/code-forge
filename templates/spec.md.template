@@ -1,0 +1,161 @@
+# <Project Name>
+
+> code-forge Option D spec — authored by `forge-planner` in Phase 1.
+> Consumed by the outer `/goal` orchestrator and per-cycle child sessions.
+> Edit placeholders (`<…>`); leave structural blocks intact.
+
+## Vision
+
+<One short paragraph: what this PoC/MVP achieves and for whom.>
+
+## Target Users
+
+- <user type 1> — <why they care>
+- <user type 2> — <why they care>
+
+## Acceptance Criteria
+
+- **AC-001** — <observable behavior the finished system must exhibit>
+- **AC-002** — <…>
+- **AC-003** — <…>
+
+## Architecture
+
+<Key components, data flow, language/runtime choices. Keep concise — this
+is a PoC. ~½ page max.>
+
+## Out of Scope
+
+- <thing intentionally not built>
+- <thing punted to a future iteration>
+
+## E2E Tests
+
+```yaml
+- id: E-001
+  name: <short scenario name>
+  kind: ui | api | cli
+  preconditions: <state required before scenario starts>
+  steps:
+    - <step 1>
+    - <step 2>
+  expected: <observable outcome>
+  covers: [AC-001]
+  tooling: <chrome-devtools-mcp | curl | direct CLI | etc>
+
+- id: E-002
+  name: <…>
+  kind: <…>
+  steps: [<…>]
+  expected: <…>
+  covers: [AC-002, AC-003]
+```
+
+> E2E tests are owned by the final cycle's `tests.json` (Option D has no
+> separate Phase F). The final cycle's `e2e_covers:` field lists which
+> E ids it brings online.
+
+## Cycle Plan
+
+```yaml
+- id: C1
+  goal: <human-readable cycle goal — e.g. "implement the user storage layer">
+  files_affected:
+    - src/storage/users.ts
+    - src/storage/types.ts
+  acceptance: [AC-001]
+  goal_condition: |
+    cycles/C1/result.json exists with status: pass AND
+    cycles/C1/review.md has 0 critical clusters,
+    or stop after 30 turns
+
+- id: C2
+  goal: <…>
+  files_affected: [<…>]
+  acceptance: [AC-002]
+  goal_condition: |
+    cycles/C2/result.json exists with status: pass AND
+    cycles/C2/review.md has 0 critical clusters,
+    or stop after 30 turns
+
+- id: C3
+  goal: <final cycle — includes e2e wiring>
+  files_affected: [<…>]
+  acceptance: [AC-003]
+  e2e_covers: [E-001, E-002]
+  goal_condition: |
+    cycles/C3/result.json exists with status: pass AND
+    cycles/C3/review.md has 0 critical clusters AND
+    e2e scenarios E-001, E-002 are exercised by tests in this cycle,
+    or stop after 30 turns
+```
+
+> Cycles run **sequentially**. The outer goal session reads this block,
+> picks the next pending cycle, and spawns one `claude -p` child per
+> cycle.
+
+## Reviewer Config
+
+```yaml
+model: opus            # or sonnet
+dimensions:
+  - correctness        # ★ default
+  - simplicity         # ★ default
+  - security           # ★ default
+  # additional Tier 1: design, error-handling, tests-vs-impl
+  # Tier 2: performance, naming-readability, dependency-hygiene,
+  #         type-safety, concurrency, observability
+  # Tier 3 (declare per-project as needed):
+  #         sui-move-idioms, frontend-a11y, api-contract-stability
+```
+
+- The **length of `dimensions`** = number of reviewers dispatched per
+  cycle.
+- Want 2 security reviewers? List `security` twice.
+- `model` is passed through to each reviewer's `Agent` dispatch.
+
+---
+
+## Notes for the outer goal session
+
+The outer Claude must **narrate** each cycle's status in transcript so
+the Haiku evaluator can verdict the aggregate goal. A typical outer
+turn:
+
+```
+Reading .forge/state.json — cycle C1 is the next pending entry.
+Spawning child: claude -p "/goal cycles/C1/result.json ..."
+
+[bash output: child exited; spent 12 turns; status=pass]
+
+Reading cycles/C1/result.json:
+  { "status": "pass", "summary": "all tests pass; 0 critical findings",
+    "winner_worker": "W3", "review_clusters": { "critical": 0, "high": 2 } }
+Cycle C1 complete with status=pass. Moving to cycle C2.
+```
+
+Every line the outer Claude writes is visible to the evaluator.
+**Narrate explicitly** — don't rely on the evaluator inferring state
+from filesystem reads it can't see.
+
+## Notes for cycle-child sessions
+
+Each cycle child must surface, in transcript, the values its `/goal`
+condition depends on:
+
+```
+Reviewers complete. Reading cycles/C1/review.md cluster summary:
+  - critical: 0
+  - high: 2
+  - medium: 5
+  - low: 3
+
+Writing cycles/C1/result.json:
+  { "status": "pass", "summary": "all tests pass; 0 critical findings",
+    "winner_worker": "W3",
+    "review_clusters": { "critical": 0, "high": 2 } }
+```
+
+The evaluator sees the cluster count and `result.json` content in
+transcript, verdicts the goal cleared.
+

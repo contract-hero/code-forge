@@ -1,147 +1,70 @@
 #!/usr/bin/env node
 
 /**
- * Forge Guard — Programmatic enforcement for the Code Forge protocol.
+ * Forge Guard (Option D): block writes that would weaken tests during green.
  *
- * Carries forward the four original rig invariants (contract-exists,
- * evaluation-passed, phase-transition, codex-gates) and adds four
- * invariants targeting TDD discipline and parallel-review correctness.
- *
- * Original invariants (kept):
- *   1. No implementation without a contract.
- *   2. No advancing past a failed cycle review.
- *   3. Phase transitions must follow order.
- *   4. Codex gates cannot be silently skipped (unless --light).
- *
- * Newer invariants (§8 of spec.md):
- *   5. PreToolUse(Edit) — block edits to test files during green phase
- *      (anti-weakening rule from 05-tdd.md).
- *   6. PreToolUse(Task) — block second `reviewer` Agent dispatch >5 seconds
- *      after a previous reviewer's subagent-N.json appeared. Forces
- *      single-turn fan-out during consolidated-review.
- *   7. PreToolUse(Edit/Write) — post-cycle-pass freeze: block edits to files
- *      named in a sealed cycle's contract.md until next cycle's contract
- *      phase begins.
- *   8. PostToolUse(Edit/Write) — auto-fire cycle-validate.sh on edits to
- *      tests.json, contract.md, or subagent-*.json.
- *
- * Note: Rule 2 from §8 (red-phase exit-code requirement) is implemented in
- * scripts/cycle-tests-pass.sh, not here — the script IS the gate. See its
- * inversion-for-red logic.
- *
- * State source of truth: .forge/state.json (v2). Falls back to .forge/status.md
- * YAML frontmatter (v1/rig) when state.json is absent, for transitional repos.
+ * See agents/test-author.md for tests.json schema and
+ * docs/goal-integration.md for protocol context.
  */
 
-import { readFileSync, existsSync, statSync, readdirSync, realpathSync } from "node:fs";
-import { resolve, dirname, basename, join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { readFileSync, existsSync, realpathSync } from "node:fs";
+import { resolve, dirname, basename } from "node:path";
 
-// --- Phase ordering ---
+// --- Helpers --------------------------------------------------------------
 
-const PHASE_ORDER = [
-  "intent",
-  "exploration",
-  "prompt-refinement",
-  "agent-detection",
-  "specification",
-  "spec-critique",
-  "cycle-planning",
-  "cycle",
-  // v2 sub-phases inside cycle:
-  "contract",
-  "test-list",
-  "red",
-  "green",
-  "consolidated-review",
-  "done",
-];
-
-// --- Helpers ---
-
+/**
+ * Parse a JSON payload off stdin. Distinguishes three cases:
+ *   - empty stdin → returns { kind: "empty" } (legitimate no-op)
+ *   - malformed   → returns { kind: "malformed", error: <string> } (fail-closed signal)
+ *   - parsed      → returns { kind: "parsed", value: <object> }
+ */
 function parseStdin() {
+  let raw;
   try {
-    const raw = readFileSync(0, "utf8");
-    if (!raw.trim()) return null;
-    return JSON.parse(raw);
-  } catch {
-    return null;
+    raw = readFileSync(0, "utf8");
+  } catch (err) {
+    return { kind: "malformed", error: `stdin read failed: ${err.message}` };
+  }
+  if (!raw.trim()) return { kind: "empty" };
+  try {
+    return { kind: "parsed", value: JSON.parse(raw) };
+  } catch (err) {
+    return { kind: "malformed", error: `stdin JSON parse failed: ${err.message}` };
   }
 }
 
-function readYamlFrontmatter(filePath) {
-  try {
-    const content = readFileSync(filePath, "utf8");
-    const match = content.match(/^---\n([\s\S]*?)\n---/);
-    if (!match) return null;
-    const pairs = {};
-    for (const line of match[1].split("\n")) {
-      const kv = line.match(/^(\w[\w-]*):\s*"?([^"]*)"?\s*$/);
-      if (kv) pairs[kv[1]] = kv[2].trim();
-    }
-    return pairs;
-  } catch {
-    return null;
-  }
-}
-
-// Returns raw frontmatter text (between leading and closing --- lines), or
-// null if the file is missing or has no frontmatter. Used by parsers that
-// need block-style YAML, which the scalar-only readYamlFrontmatter() above
-// can't represent.
-function readYamlFrontmatterRaw(filePath) {
-  try {
-    const content = readFileSync(filePath, "utf8");
-    const match = content.match(/^---\n([\s\S]*?)\n---/);
-    return match ? match[1] : null;
-  } catch {
-    return null;
-  }
-}
-
+/**
+ * Read .forge/state.json. Returns { kind: "missing" | "malformed" | "parsed", value? }.
+ * Malformed is a *signal*, not a silent null — the caller decides how to react.
+ */
 function readState(forgeRoot) {
-  if (!forgeRoot) return null;
-  // Prefer v2 state.json; fall back to v1 status.md
+  if (!forgeRoot) return { kind: "missing" };
   const stateJson = resolve(forgeRoot, "state.json");
-  if (existsSync(stateJson)) {
-    try {
-      return JSON.parse(readFileSync(stateJson, "utf8"));
-    } catch {
-      return null;
-    }
+  if (!existsSync(stateJson)) return { kind: "missing" };
+  try {
+    return { kind: "parsed", value: JSON.parse(readFileSync(stateJson, "utf8")) };
+  } catch (err) {
+    return { kind: "malformed", error: `state.json parse failed: ${err.message}` };
   }
-  const statusMd = resolve(forgeRoot, "status.md");
-  if (existsSync(statusMd)) {
-    return readYamlFrontmatter(statusMd);
-  }
-  return null;
 }
 
 function findForgeRoot(filePath) {
-  const match = filePath?.match(/^(.+\/\.forge)\//);
+  // Non-greedy: prefer the OUTERMOST .forge segment. A staged candidate path
+  // like `<repo>/.forge/cycles/C1/green/candidates/worker-3/files/.forge/state.json`
+  // has two `.forge/` segments — the outer one is the real forge root; the
+  // inner one is part of a worker's candidate-staged tree.
+  const match = filePath?.match(/^(.+?\/\.forge)\//);
   if (match) return match[1];
   if (filePath?.endsWith("/.forge")) return filePath;
   return null;
 }
 
-function extractCycleNumber(filePath) {
-  const match = filePath?.match(/\.forge\/cycles\/(\d+)\//);
-  return match ? parseInt(match[1], 10) : null;
-}
-
-function isForgeArtifact(filePath) {
-  return filePath && filePath.includes(".forge/");
-}
-
 // Realpath the longest-existing-ancestor prefix of `p`, then re-attach the
 // missing trailing segments. Lets us canonicalize a path that names a planned
-// write (file doesn't exist; intermediate dirs may also not exist), as long as
-// at least one ancestor is on disk. When no ancestor exists, returns `p`
-// unchanged.
+// write whose intermediate dirs may also not exist.
 function realpathLongestPrefix(p) {
   let cur = p;
   const tail = [];
-  // Stop walking at the filesystem root or empty.
   while (cur && cur !== "/" && cur !== ".") {
     try {
       return tail.length === 0
@@ -155,17 +78,8 @@ function realpathLongestPrefix(p) {
   return p;
 }
 
-// Strip the absolute repoRoot prefix from filePath. If filePath is not under
-// repoRoot, returns it unchanged. Used by phase-aware path checks that need
-// repo-relative comparison against tests.json / contract.md entries.
-//
-// Both sides go through realpathLongestPrefix() first: on macOS, process.cwd()
-// resolves through the /var → /private/var symlink, but the supplied filePath
-// usually doesn't, so a naive string-prefix compare misses every match when
-// the worktree path crosses a symlink (typical under mktemp). filePath is
-// often a planned write that doesn't exist yet, plus its intermediate dirs
-// may also be missing in synthetic test setups — the longest-prefix walk
-// handles both cases.
+// Strip the absolute repoRoot prefix. Both sides go through realpathLongestPrefix
+// so /var → /private/var symlink crossings don't defeat the string compare.
 function makeRepoRelative(filePath, repoRoot) {
   const realRoot = realpathLongestPrefix(repoRoot);
   const realFile = realpathLongestPrefix(filePath);
@@ -174,995 +88,451 @@ function makeRepoRelative(filePath, repoRoot) {
     : realFile;
 }
 
-// Best-of-N workers stage candidate implementations under
-// .forge/cycles/<n>/green/candidates/worker-<k>/files/<repo-relative-path>
-// (per agents/implementer-worker.md). Hooks comparing against repo-relative
-// paths in tests.json need to peel that prefix to recognize a worker's
-// candidate write as targeting the same repo path.
+// Workers stage candidates under
+// .forge/cycles/<id>/green/candidates/worker-K/files/<repo-relative-path>.
+// Cycle IDs can be either strings (C1, C2) or numbers (1, 2).
 const CANDIDATE_STAGING_RE =
-  /^\.forge\/cycles\/\d+\/green\/candidates\/worker-\d+\/files\/(.+)$/;
+  /^\.forge\/cycles\/[^/]+\/green\/candidates\/worker-\d+\/files\/(.+)$/;
 
 function peelCandidatePrefix(relPath) {
   const m = relPath.match(CANDIDATE_STAGING_RE);
   return m ? m[1] : null;
 }
 
-function listFilesInContract(contractPath) {
-  // Extract bullet-list paths from the "## Files" section of contract.md.
-  // Format expected: "- path/to/file.ext — description"
-  if (!existsSync(contractPath)) return [];
-  try {
-    const content = readFileSync(contractPath, "utf8");
-    const m = content.match(/^## Files\s*\n([\s\S]*?)(?=\n## |\n$)/m);
-    if (!m) return [];
-    const paths = [];
-    for (const line of m[1].split("\n")) {
-      const lm = line.match(/^\s*-\s+([^\s—\-]+)/);
-      if (lm) paths.push(lm[1].trim());
-    }
-    return paths;
-  } catch {
-    return [];
-  }
-}
-
 function loadTestsJson(cycleDir) {
   const testsPath = resolve(cycleDir, "tests.json");
-  if (!existsSync(testsPath)) return [];
+  if (!existsSync(testsPath)) return { kind: "missing" };
   try {
-    return JSON.parse(readFileSync(testsPath, "utf8"));
-  } catch {
-    return [];
+    return { kind: "parsed", value: JSON.parse(readFileSync(testsPath, "utf8")) };
+  } catch (err) {
+    return { kind: "malformed", error: `tests.json parse failed: ${err.message}` };
   }
 }
 
-// --- ORIGINAL invariants (kept from rig, adapted for v2) ---
+function resolveForgeRoot(forgeRoot) {
+  if (forgeRoot) return forgeRoot;
+  const candidate = resolve(process.cwd(), ".forge");
+  return existsSync(candidate) ? candidate : null;
+}
+
+// Recognize the load-bearing rule-5 anchor files: state.json (because it
+// carries `phase`) and any cycle's tests.json (because it carries the list
+// of test_file paths). Block direct edits to these during green, since
+// rewriting them disarms the rule.
+const STATE_JSON_TAIL_RE = /(?:^|\/)\.forge\/state\.json$/;
+const TESTS_JSON_TAIL_RE = /(?:^|\/)\.forge\/cycles\/[^/]+\/tests\.json$/;
+
+function isProtectedAnchor(relPath) {
+  return STATE_JSON_TAIL_RE.test(relPath) || TESTS_JSON_TAIL_RE.test(relPath);
+}
+
+// --- The rule -----------------------------------------------------------
 
 /**
- * Phase-transition check (advisory). Fires on state.json or status.md writes.
- * Verifies that the new phase has its prerequisite artifacts.
- */
-function checkPhaseTransitionV2(filePath, forgeRoot) {
-  if (!forgeRoot) return null;
-  const isStateWrite =
-    filePath?.endsWith("/state.json") || filePath?.endsWith("/status.md");
-  if (!isStateWrite) return null;
-
-  const state = readState(forgeRoot);
-  if (!state || !state.phase) return null;
-  const newPhase = state.phase;
-
-  const missingPrereqs = [];
-  if (newPhase === "specification" || newPhase === "spec-critique") {
-    if (!existsSync(resolve(forgeRoot, "intent.md"))) {
-      missingPrereqs.push("intent.md (Phase 0: Intent Sharpening)");
-    }
-  }
-  if (newPhase === "specification") {
-    if (!existsSync(resolve(forgeRoot, "planning-prompt.md"))) {
-      missingPrereqs.push("planning-prompt.md (Phase 1: Prompt Refinement)");
-    }
-  }
-  if (newPhase === "spec-critique") {
-    if (!existsSync(resolve(forgeRoot, "spec.md"))) {
-      missingPrereqs.push("spec.md (Phase 2: Specification)");
-    }
-  }
-  if (newPhase === "cycle-planning" || newPhase === "cycle" || newPhase === "contract") {
-    if (!existsSync(resolve(forgeRoot, "spec.md"))) {
-      missingPrereqs.push("spec.md (Phase 2: Specification)");
-    }
-  }
-  if (newPhase === "cycle" || newPhase === "contract") {
-    if (!existsSync(resolve(forgeRoot, "cycle-plan.md"))) {
-      missingPrereqs.push("cycle-plan.md (Phase 3: Cycle Planning)");
-    }
-  }
-
-  if (missingPrereqs.length === 0) return null;
-  return [
-    "[ADVISE] Forge Guard: possible phase skip detected",
-    "",
-    `State updated to phase "${newPhase}" but prerequisite artifacts are missing:`,
-    ...missingPrereqs.map((p) => `  - ${p}`),
-    "",
-    "Review the forge workflow and ensure all prior phases completed.",
-  ].join("\n");
-}
-
-/**
- * Codex-gate advisory. Fires on state.json or status.md writes.
- */
-function checkCodexGatesV2(filePath, forgeRoot) {
-  if (!forgeRoot) return null;
-  const isStateWrite =
-    filePath?.endsWith("/state.json") || filePath?.endsWith("/status.md");
-  if (!isStateWrite) return null;
-
-  const state = readState(forgeRoot);
-  if (!state) return null;
-
-  const lightMode =
-    state.light_mode === true ||
-    state.light_mode === "true" ||
-    state["light-mode"] === "true";
-  const phase = state.phase || "";
-  const currentCycle = parseInt(state.current_cycle || state.currentCycle || "0", 10);
-
-  const missing = [];
-  if (
-    phase === "specification" ||
-    phase === "spec-critique" ||
-    phase === "cycle-planning" ||
-    phase === "cycle" ||
-    phase === "contract"
-  ) {
-    if (!existsSync(resolve(forgeRoot, "prompt-evolution.md"))) {
-      missing.push("prompt-evolution.md (Gate G1: Prompt Refinement with Codex)");
-    }
-  }
-  if (
-    !lightMode &&
-    (phase === "cycle-planning" || phase === "cycle" || phase === "contract")
-  ) {
-    if (!existsSync(resolve(forgeRoot, "spec-critique.md"))) {
-      missing.push("spec-critique.md (Gate G2: Spec Critique by Codex)");
-    }
-  }
-  // G5: codex-review for completed previous cycles (v2 keeps the same gate)
-  if ((phase === "cycle" || phase === "contract") && currentCycle > 1) {
-    for (let i = 1; i < currentCycle; i++) {
-      const reviewPath = resolve(forgeRoot, "cycles", String(i), "codex-review.md");
-      if (!existsSync(reviewPath)) {
-        missing.push(`cycles/${i}/codex-review.md (Gate G5: Codex Cycle Review)`);
-      }
-    }
-  }
-
-  if (missing.length === 0) return null;
-  const prefix = lightMode
-    ? "[ADVISE] Forge Guard: Codex artifacts missing (light mode — may be expected)"
-    : "[ADVISE] Forge Guard: Codex gate artifacts missing";
-  return [
-    prefix,
-    "",
-    "The following Codex review artifacts were not found:",
-    ...missing.map((m) => `  - ${m}`),
-    "",
-    lightMode
-      ? "Light mode is active — some Codex gates are optional."
-      : "The forge protocol requires Codex cross-checking at each gate.",
-  ].join("\n");
-}
-
-// --- Hard-block invariants (kept from rig) ---
-
-function checkContractExists(filePath) {
-  if (!filePath.match(/\.forge\/cycles\/\d+\/(implementation-notes\.md|green\.log)$/)) return null;
-  const cycleN = extractCycleNumber(filePath);
-  if (cycleN === null) return null;
-  const forgeRoot = findForgeRoot(filePath);
-  const cycleDir = dirname(filePath);
-  const contractPath = forgeRoot
-    ? resolve(forgeRoot, "cycles", String(cycleN), "contract.md")
-    : resolve(cycleDir, "contract.md");
-  if (existsSync(contractPath)) return null;
-  return [
-    "[BLOCK] Forge Guard: missing contract",
-    "",
-    `Cannot write implementation artifact for cycle ${cycleN} — no contract found.`,
-    `Expected: ${contractPath}`,
-    "",
-    "The forge protocol requires a negotiated completion contract before",
-    "implementation begins. Complete the contract phase first.",
-  ].join("\n");
-}
-
-function checkPreviousCyclePassed(filePath) {
-  const cycleN = extractCycleNumber(filePath);
-  if (cycleN === null || cycleN <= 1) return null;
-  if (!filePath.match(/\.forge\/cycles\/\d+\/contract\.md$/)) return null;
-  const forgeRoot = findForgeRoot(filePath);
-  const prevCycle = cycleN - 1;
-  const consolidatedPath = forgeRoot
-    ? resolve(forgeRoot, "cycles", String(prevCycle), "_consolidated.json")
-    : resolve(dirname(dirname(filePath)), String(prevCycle), "_consolidated.json");
-  // v1/rig fallback: check evaluation.md too
-  const evalPath = forgeRoot
-    ? resolve(forgeRoot, "cycles", String(prevCycle), "evaluation.md")
-    : resolve(dirname(dirname(filePath)), String(prevCycle), "evaluation.md");
-
-  if (!existsSync(consolidatedPath) && !existsSync(evalPath)) {
-    return [
-      `[BLOCK] Forge Guard: cycle ${prevCycle} not reviewed`,
-      "",
-      `Cannot start cycle ${cycleN} — no _consolidated.json or evaluation.md for cycle ${prevCycle}.`,
-      "",
-      "Each cycle must complete consolidated-review before the next begins.",
-    ].join("\n");
-  }
-
-  // If v2 consolidated artifact exists, check pass criteria
-  if (existsSync(consolidatedPath)) {
-    try {
-      const arr = JSON.parse(readFileSync(consolidatedPath, "utf8"));
-      const critical = arr.filter((c) => c.max_severity === "critical").length;
-      const disputed = arr.filter((c) => c.disputed_severity === true).length;
-      if (critical > 0 || disputed > 0) {
-        return [
-          `[BLOCK] Forge Guard: cycle ${prevCycle} did not pass review`,
-          "",
-          `Cannot start cycle ${cycleN} — cycle ${prevCycle} has ${critical} critical and ${disputed} disputed clusters.`,
-          `Run: bash scripts/cycle-pass.sh ${dirname(consolidatedPath)}`,
-          "",
-          "Address findings or split disputed clusters before advancing.",
-        ].join("\n");
-      }
-    } catch { /* fall through to evaluation.md check */ }
-  }
-
-  // v1 fallback
-  if (existsSync(evalPath)) {
-    const fm = readYamlFrontmatter(evalPath);
-    if (fm && (fm.verdict || "").toUpperCase() !== "PASS") {
-      return [
-        `[BLOCK] Forge Guard: cycle ${prevCycle} evaluation is ${fm.verdict || "UNKNOWN"}`,
-        "",
-        `Cannot start cycle ${cycleN} — cycle ${prevCycle} has not passed evaluation.`,
-      ].join("\n");
-    }
-  }
-
-  return null;
-}
-
-// --- NEW v2 invariants ---
-
-/**
- * Rule 5: Block test-file edits during green phase.
- * Prevents the implementer from weakening tests to make them pass.
+ * Edit/Write block. Blocks when:
+ *   - phase == "green" AND
+ *     - file is a test_file listed in this cycle's tests.json, OR
+ *     - file is a protected anchor (state.json / tests.json itself)
+ *
+ * Returns:
+ *   - null when no violation
+ *   - { error: <stderr message>, exitCode: 2 } when a violation is detected
+ *   - { error: <stderr message>, exitCode: 2 } when state/tests JSON is malformed
+ *     (fail-closed: a corrupted anchor file cannot silently disengage the rule)
  */
 function checkTestFileEditDuringGreen(filePath, forgeRoot) {
-  if (!isForgeArtifact(filePath)) {
-    // Test file might live outside .forge/. Need to consult tests.json.
-    if (!forgeRoot) {
-      // Can't determine forgeRoot from filePath directly; try cwd().
-      const possibleForge = resolve(process.cwd(), ".forge");
-      if (!existsSync(possibleForge)) return null;
-      forgeRoot = possibleForge;
-    }
+  if (!filePath) return null;
+  const root = resolveForgeRoot(forgeRoot ?? findForgeRoot(filePath));
+  if (!root) return null;
+
+  const state = readState(root);
+  if (state.kind === "missing") return null;
+  if (state.kind === "malformed") {
+    return {
+      exitCode: 2,
+      error: [
+        "[BLOCK] Forge Guard: .forge/state.json is malformed",
+        "",
+        state.error,
+        "",
+        "Refusing to evaluate the green-phase rule against an unparseable",
+        "state file. Fix or remove .forge/state.json and retry.",
+      ].join("\n"),
+    };
   }
 
-  const state = readState(forgeRoot);
-  if (!state) return null;
+  if (state.value.phase !== "green") return null;
 
-  // Phase check: must be green (or sub-phase of cycle that means green)
-  const phase = state.phase || "";
-  if (phase !== "green") return null;
-
-  const cycleN = state.current_cycle || state.currentCycle || 1;
-  const cycleDir = resolve(forgeRoot, "cycles", String(cycleN));
-  const tests = loadTestsJson(cycleDir);
-  if (tests.length === 0) return null;
-
-  // tests.json test_file values are repo-relative; normalize filePath so we
-  // can compare in one Set.has lookup. Also peel the worker candidate-staging
-  // prefix when present — the coordinator's rsync apply is Bash-level and
-  // invisible to forge-guard, so blocking at the worker's write time is the
-  // only defense against test-file weakening landing in the repo.
-  const repoRoot = resolve(forgeRoot, "..");
+  const repoRoot = resolve(root, "..");
   const relPath = makeRepoRelative(filePath, repoRoot);
   const candidateResidue = peelCandidatePrefix(relPath);
+  const peeled = candidateResidue ?? relPath;
 
-  const testFiles = new Set(tests.map((t) => t.test_file).filter(Boolean));
-  if (!testFiles.has(relPath) && !(candidateResidue && testFiles.has(candidateResidue))) {
-    return null;
+  // Protect the anchor files themselves. tests.json and state.json are not
+  // listed inside tests.json[*].test_file, so the test-list lookup below
+  // would miss them — but rewriting either disarms the rule.
+  if (isProtectedAnchor(relPath) || isProtectedAnchor(peeled)) {
+    return {
+      exitCode: 2,
+      error: [
+        "[BLOCK] Forge Guard: anchor-file edit blocked during green phase",
+        "",
+        `Cycle ${state.value.current_cycle ?? "?"} is in 'green'. Edits to`,
+        `state.json or any cycle's tests.json are blocked during green —`,
+        `rewriting either would disarm the test-immutability rule.`,
+        "",
+        `Blocked path: ${relPath}`,
+        "",
+        "If tests need amending, the cycle must roll back to the test-list",
+        "step and the test-author re-emit tests.json. Don't edit anchors in green.",
+      ].join("\n"),
+    };
   }
 
-  return [
-    "[BLOCK] Forge Guard: test-file edit blocked during green phase",
-    "",
-    `Cycle ${cycleN} is in 'green' phase. The implementer cannot edit test files`,
-    `during this phase — that is the anti-weakening rule.`,
-    "",
-    `Blocked path: ${relPath}`,
-    `Listed in:    ${cycleDir}/tests.json`,
-    "",
-    "If the tests are genuinely wrong, return to the test-list phase and",
-    "amend tests.json with the orchestrator's review. Do not edit tests in green.",
-  ].join("\n");
+  const cycleId = state.value.current_cycle ?? state.value.currentCycle ?? 1;
+  const cycleDir = resolve(root, "cycles", String(cycleId));
+  const tests = loadTestsJson(cycleDir);
+  if (tests.kind === "missing") return null;
+  if (tests.kind === "malformed") {
+    return {
+      exitCode: 2,
+      error: [
+        "[BLOCK] Forge Guard: tests.json malformed for current cycle",
+        "",
+        tests.error,
+        "",
+        "Refusing to evaluate the green-phase rule against an unparseable",
+        `tests.json (cycles/${cycleId}/tests.json). Fix or re-emit.`,
+      ].join("\n"),
+    };
+  }
+
+  if (tests.value.length === 0) return null;
+  const testFiles = new Set(tests.value.map((t) => t.test_file).filter(Boolean));
+  const directHit = testFiles.has(relPath);
+  const candidateHit = candidateResidue && testFiles.has(candidateResidue);
+  if (!directHit && !candidateHit) return null;
+
+  return {
+    exitCode: 2,
+    error: [
+      "[BLOCK] Forge Guard: test-file edit blocked during green phase",
+      "",
+      `Cycle ${cycleId} is in 'green' phase. Tests are read-only here — the`,
+      `anti-weakening rule from Option D's spec. The /goal evaluator only`,
+      `judges what's in the transcript, so without this hook a "tests pass"`,
+      `goal would happily mutate the tests instead of the implementation.`,
+      "",
+      `Blocked path: ${relPath}`,
+      `Listed in:    ${cycleDir}/tests.json`,
+      "",
+      "If the tests are genuinely wrong, roll the cycle back to the test-list",
+      "step and amend tests.json. Do not edit tests during green.",
+    ].join("\n"),
+  };
 }
 
 /**
- * F10 (v0.4.x): Bash hook coverage during green.
+ * Bash side-door block. Blocks Bash commands during green that:
+ *   - write to a test_file path via any of the recognized patterns, OR
+ *   - mention a test_file path while invoking a shell escape (sh -c, bash -c,
+ *     eval, xargs sh, env … sh -c) — these defeat purely-syntactic matching
+ *     and we'd rather false-positive than allow the bypass class.
  *
- * Edit/Write tool calls to test_file paths are blocked during green by
- * checkTestFileEditDuringGreen (rule 5/8). But workers' tool allowlist
- * includes Bash, which is a side door — `echo > test/foo.test.ts`,
- * `sed -i test/foo.test.ts`, `cp src/x test/foo.test.ts`, and so on can
- * write test files without triggering Edit/Write hooks.
+ * Pattern coverage (vs the Sonnet implementer's likely fallbacks):
+ *   - Redirects: > >> &> >| 2> [0-9]> with optional 'tee [-a]' pipe
+ *   - cp / mv (last-arg destination, plus `-t <dir>` flag form)
+ *   - sed -i (GNU `-i'.bak'` and BSD `-i ''` empty-arg forms)
+ *   - perl -i / perl -pi / perl -i.bak
+ *   - awk -i inplace
+ *   - ruby -i
+ *   - python -c "open('path','w'|'a'|'x').write(…)"
+ *   - dd of=<path>
+ *   - truncate <path> / truncate -s … <path>
+ *   - install <src> <dst>
+ *   - ln -s / ln -sf <target> <linkname>
+ *   - rm / rm -f / rm -rf (when targeting a tracked test_file)
  *
- * This check parses the Bash command for the obvious file-creating patterns
- * and blocks when the resolved target is in the test_file set or matches a
- * test_file via the worker candidate-staging prefix-peel.
- *
- * The parser is heuristic — accept some false negatives (multi-arg cp -t,
- * shell quoting around the redirect target, etc.). Layered defense: F4 +
- * rule 5/8 + F10 prompt-side guidance in agents/implementer-worker.md +
- * the cycle-review pass that follows green. Don't claim completeness.
+ * Layered with a CI-time `git diff tests/` check this is closer to defense
+ * in depth; alone, it's a moving target. We accept false-positives over
+ * false-negatives here.
  */
 function checkBashFileWriteDuringGreen(toolInput, forgeRoot) {
   if (!toolInput) return null;
   const command = String(toolInput.command || "");
   if (!command) return null;
 
-  if (!forgeRoot) {
-    const possibleForge = resolve(process.cwd(), ".forge");
-    if (!existsSync(possibleForge)) return null;
-    forgeRoot = possibleForge;
+  const root = resolveForgeRoot(forgeRoot);
+  if (!root) return null;
+
+  const state = readState(root);
+  if (state.kind === "missing") return null;
+  if (state.kind === "malformed") {
+    return {
+      exitCode: 2,
+      error: [
+        "[BLOCK] Forge Guard: .forge/state.json malformed; refusing Bash check",
+        "",
+        state.error,
+      ].join("\n"),
+    };
   }
-  const state = readState(forgeRoot);
-  if (!state) return null;
-  if ((state.phase || "") !== "green") return null;
 
-  const cycleN = state.current_cycle || state.currentCycle || 1;
-  const cycleDir = resolve(forgeRoot, "cycles", String(cycleN));
+  if (state.value.phase !== "green") return null;
+
+  const cycleId = state.value.current_cycle ?? state.value.currentCycle ?? 1;
+  const cycleDir = resolve(root, "cycles", String(cycleId));
   const tests = loadTestsJson(cycleDir);
-  if (tests.length === 0) return null;
+  if (tests.kind === "missing") return null;
+  if (tests.kind === "malformed") {
+    return {
+      exitCode: 2,
+      error: [
+        "[BLOCK] Forge Guard: tests.json malformed; refusing Bash check",
+        "",
+        tests.error,
+      ].join("\n"),
+    };
+  }
 
-  const testFiles = new Set(tests.map((t) => t.test_file).filter(Boolean));
-  if (testFiles.size === 0) return null;
+  const testFiles = new Set(tests.value.map((t) => t.test_file).filter(Boolean));
+  const repoRoot = resolve(root, "..");
 
+  // 1. Mention-based block for shell-escape invocations. Two flavors:
+  //    - eval / `<shell> -c …` / heredoc payloads: don't try to parse the
+  //      inner command, just check whether any test_file path is mentioned.
+  //    - in-place editors (perl/ruby/awk -i): regex-based extraction is
+  //      fragile across flag orderings, so we fall back to a mention check.
+  //    False-positive over false-negative.
+  const shellEscapeRe =
+    /\b(?:sh|bash|zsh|ksh|dash|xargs|env|nohup|unbuffer)\b[^|;&\n]*?(?:-c\b|<<<|<<-?\s*\w)/;
+  const evalRe = /\beval\b/;
+  // Flag-like `-i` does not have a word boundary before the dash (space + `-`
+  // is non-word + non-word), so anchor explicitly on a leading whitespace.
+  // Allow `-i`, `-pi`, `-i.bak`, `-inplace`.
+  const inplaceEditorRe = /\b(?:perl|ruby|awk)\b[^|;&\n]*?\s-p?i(?:np(?:lace)?)?(?:\.\w+)?\b/;
+  if (shellEscapeRe.test(command) || evalRe.test(command) || inplaceEditorRe.test(command)) {
+    for (const tf of testFiles) {
+      if (command.includes(tf)) {
+        return blockBashViolation({
+          cycleId,
+          target: tf,
+          matched: tf,
+          reason: "shell-escape / in-place editor invocation references a test_file path",
+        });
+      }
+    }
+    // Anchor paths (state.json / cycles/<id>/tests.json) — same scrutiny.
+    const anchorMentions = [".forge/state.json", `cycles/${cycleId}/tests.json`];
+    for (const tf of anchorMentions) {
+      if (command.includes(tf)) {
+        return blockBashViolation({
+          cycleId,
+          target: tf,
+          matched: tf,
+          reason: "shell-escape / in-place editor invocation references a forge-guard anchor",
+        });
+      }
+    }
+  }
+
+  // 2. Pattern-based write-target extraction.
   const writeTargets = extractBashWriteTargets(command);
-  if (writeTargets.length === 0) return null;
-
-  const repoRoot = resolve(forgeRoot, "..");
-  for (const t of writeTargets) {
-    // The target may be relative to cwd; resolve against repoRoot for the
-    // string-prefix path normalization step.
-    const abs = t.startsWith("/") ? t : resolve(repoRoot, t);
+  for (const target of writeTargets) {
+    const abs = target.startsWith("/") ? target : resolve(repoRoot, target);
     const rel = makeRepoRelative(abs, repoRoot);
     const residue = peelCandidatePrefix(rel);
-    const matched = testFiles.has(rel) ? rel : (residue && testFiles.has(residue) ? residue : null);
+    const peeled = residue ?? rel;
+
+    // Anchor-file writes (state.json / current cycle's tests.json) are
+    // blocked unconditionally during green — rewriting them disarms the rule.
+    if (isProtectedAnchor(rel) || isProtectedAnchor(peeled)) {
+      return blockBashViolation({
+        cycleId,
+        target,
+        matched: rel,
+        reason: "Bash write to a forge-guard anchor file (state.json / tests.json)",
+      });
+    }
+
+    const matched = testFiles.has(rel)
+      ? rel
+      : residue && testFiles.has(residue)
+      ? residue
+      : null;
     if (matched) {
-      return [
-        "[BLOCK] Forge Guard: Bash file-write to test-file path during green",
-        "",
-        `Cycle ${cycleN} is in 'green' phase. Bash commands cannot write to`,
-        `paths listed in tests.json's test_file entries — that's the`,
-        `anti-weakening rule, applied to Bash to close the F4 worker side door.`,
-        "",
-        `Blocked target:    ${t}`,
-        `Resolved test_file: ${matched}`,
-        "",
-        "If you need to write a non-test file, target a target_file path or any",
-        "other repo path. If the test is genuinely wrong, escalate to the",
-        "orchestrator (rolls back to test-list); don't patch tests during green.",
-      ].join("\n");
+      return blockBashViolation({
+        cycleId,
+        target,
+        matched,
+        reason: "Bash file-write to a test_file path",
+      });
     }
   }
   return null;
 }
 
-// Heuristic: extract paths the command would write to.
-// Patterns covered:
-//   - `> path` and `>> path` redirects (single command; ignores quoted strings)
-//   - `| tee path` and `| tee -a path`
-//   - `cp src dst` and `mv src dst` (last positional arg = destination;
-//     multi-arg `-t` form is missed — known limitation)
-//   - `sed -i path` and `sed -i.bak path`
-function extractBashWriteTargets(command) {
-  const targets = [];
-  const stripQuotes = (s) => s.replace(/^["']|["']$/g, "");
+function blockBashViolation({ cycleId, target, matched, reason }) {
+  return {
+    exitCode: 2,
+    error: [
+      "[BLOCK] Forge Guard: Bash test-file mutation blocked during green",
+      "",
+      `Cycle ${cycleId} is in 'green' phase. ${reason}.`,
+      "",
+      `Blocked target:    ${target}`,
+      `Resolved test_file: ${matched}`,
+      "",
+      "If the test is genuinely wrong, escalate to the cycle's /goal driver;",
+      "do not patch tests during green.",
+    ].join("\n"),
+  };
+}
 
-  // Output redirects: `cmd > path` or `cmd >> path`. Also `| tee [-a] path`.
-  // We deliberately keep this regex narrow — pattern hunts for the redirect
-  // operator near the END of a command segment, not anywhere it might appear
-  // inside a quoted string. Acceptable false-negatives over false-positives.
-  for (const m of command.matchAll(/(?:^|[^&|>])(?:>>?|\|\s*tee\s+(?:-a\s+)?)\s*([^\s;&|<>]+)/g)) {
-    targets.push(stripQuotes(m[1]));
+/**
+ * Heuristic extractor: collect paths the command would write to.
+ * Strategy: strip quoted substrings first (so redirects inside quoted args
+ * don't trip the matcher), then scan for each known write family.
+ */
+function extractBashWriteTargets(command) {
+  // Drop quoted substrings so `echo "x > tests/foo"` doesn't look like a
+  // redirect. Conservative: removes both single- and double-quoted content.
+  const stripped = command
+    .replace(/"[^"]*"/g, '""')
+    .replace(/'[^']*'/g, "''");
+  const targets = [];
+  const stripQuotes = (s) => s.replace(/^["']+|["']+$/g, "");
+  const push = (raw) => {
+    if (!raw) return;
+    targets.push(stripQuotes(raw));
+  };
+
+  // Redirects: support `>`, `>>`, `&>`, `&>>`, `>|`, `2>`, `[0-9]+>`,
+  // `[0-9]+>>`, plus `| tee [-a]`. Match the operator near end of a
+  // command-segment boundary.
+  const redirectRe =
+    /(?:^|[\s;&|()])(?:&?>>?\|?|[0-9]+&?>>?\|?|\|\s*tee\s+(?:-a\s+)?)\s*([^\s;&|<>()]+)/g;
+  for (const m of stripped.matchAll(redirectRe)) push(m[1]);
+
+  // cp / mv with last-positional destination.
+  const cpMvRe = /\b(?:cp|mv|install)\s+(?:-[a-zA-Z]+\s+)*[^\s;&|<>()]+\s+([^\s;&|<>()]+)/g;
+  for (const m of stripped.matchAll(cpMvRe)) push(m[1]);
+
+  // cp / mv / install with `-t <dest-dir> <src…>` form. The destination is
+  // the arg immediately after -t, and every src that follows can land
+  // inside it — but here we only care whether a test_file path appears as
+  // any positional. So harvest every token after -t.
+  const tFormRe = /\b(?:cp|mv|install)\s+(?:-[a-zA-Z]*\s+)*-t\s+([^\s;&|<>()]+)((?:\s+[^\s;&|<>()]+)+)/g;
+  for (const m of stripped.matchAll(tFormRe)) {
+    push(m[1]);
+    for (const tok of m[2].trim().split(/\s+/)) push(tok);
   }
-  // cp / mv: take the last whitespace-separated token before a terminator as
-  // the destination. Misses `-t DEST src1 src2` and complex flag arrangements;
-  // accept that.
-  for (const m of command.matchAll(/\b(?:cp|mv)\s+(?:-[a-zA-Z]+\s+)*[^\s;&|<>]+\s+([^\s;&|<>]+)/g)) {
-    targets.push(stripQuotes(m[1]));
+
+  // sed -i, GNU and BSD forms.
+  //   GNU:  sed -i 's/x/y/' path        sed -i.bak 's/x/y/' path
+  //   BSD:  sed -i '' 's/x/y/' path
+  // After quote-stripping above, BSD `sed -i '' 's/x/y/' tests/foo.test.ts`
+  // becomes `sed -i '' '' tests/foo.test.ts`. The optional `(?:''\s+|""\s+)?`
+  // consumes the BSD empty-backup-arg before the script slot.
+  const sedRe = /\bsed\s+(?:-[a-zA-Z]+\s+)*-i(?:\.\w+)?\s+(?:''\s+|""\s+)?(?:''|""|\S+)\s+([^\s;&|<>()]+)/g;
+  for (const m of stripped.matchAll(sedRe)) push(m[1]);
+
+  // perl -i / perl -pi / perl -i.bak: last positional is the file.
+  const perlInplaceRe =
+    /\bperl\s+(?:-[a-zA-Z]+\s+)*(?:-pi?|-i)(?:\.\w+)?(?:\s+-[a-zA-Z]+)*\s+(?:-e\s+\S+\s+)?([^\s;&|<>()]+)/g;
+  for (const m of stripped.matchAll(perlInplaceRe)) push(m[1]);
+
+  // awk -i inplace 'script' file...
+  const awkInplaceRe = /\bawk\s+-i\s+inplace\b[^\n]*?(?:'[^']*'|"[^"]*"|\S+)\s+([^\s;&|<>()]+)/g;
+  for (const m of stripped.matchAll(awkInplaceRe)) push(m[1]);
+
+  // ruby -i
+  const rubyInplaceRe = /\bruby\s+(?:-[a-zA-Z]+\s+)*-i(?:\.\w+)?[^\n]*?(?:-e\s+\S+\s+)?([^\s;&|<>()]+)/g;
+  for (const m of stripped.matchAll(rubyInplaceRe)) push(m[1]);
+
+  // python -c "open('path','w'|'a'|'x').write(...)"
+  // We already stripped quotes; the inner path becomes an empty string.
+  // Fall back to a raw-command scan for the open() form.
+  const pyOpenRe = /\bpython3?\s+-c\s+(?:""|'')\s*$/m;
+  if (pyOpenRe.test(stripped)) {
+    const rawOpen = command.matchAll(
+      /\bopen\(\s*(?:'([^']+)'|"([^"]+)")\s*,\s*['"][wax][bt+]?['"]/g
+    );
+    for (const m of rawOpen) push(m[1] || m[2]);
   }
-  // sed -i path and sed -i.bak path. The script-arg may be quoted.
-  for (const m of command.matchAll(/\bsed\s+(?:-[a-zA-Z]+\s+)*-i(?:\.\w+)?\s+(?:-[a-zA-Z]+\s+)*(?:'[^']*'|"[^"]*"|[^\s;&|<>]+)\s+([^\s;&|<>]+)/g)) {
-    targets.push(stripQuotes(m[1]));
+
+  // dd of=path
+  const ddRe = /\bdd\s+[^\n]*?of=([^\s;&|<>()]+)/g;
+  for (const m of stripped.matchAll(ddRe)) push(m[1]);
+
+  // truncate <path>  /  truncate -s SIZE <path>
+  const truncateRe = /\btruncate\s+(?:-[a-zA-Z]+\s+\S+\s+)*([^\s;&|<>()]+)/g;
+  for (const m of stripped.matchAll(truncateRe)) push(m[1]);
+
+  // ln -s / ln -sf <target> <linkname>: the link name is the destination.
+  const lnRe = /\bln\s+(?:-[a-zA-Z]+\s+)*[^\s;&|<>()]+\s+([^\s;&|<>()]+)/g;
+  for (const m of stripped.matchAll(lnRe)) push(m[1]);
+
+  // rm targeting a tracked path is functionally equivalent to truncation for
+  // anti-weakening; collect every positional argument after `rm`.
+  const rmRe = /\brm\s+(?:-[a-zA-Z]+\s+)*((?:[^\s;&|<>()]+\s*)+)/g;
+  for (const m of stripped.matchAll(rmRe)) {
+    for (const tok of m[1].trim().split(/\s+/)) push(tok);
   }
+
   return targets;
 }
 
-/**
- * Rule 6: Parallel reviewer fan-out enforcement.
- * Block second `reviewer` Agent dispatch if previous reviewer's output
- * appeared more than 5 seconds ago — that means dispatch is serial, not
- * parallel.
- */
-function checkParallelReviewerFanout(toolInput, forgeRoot) {
-  if (!toolInput) return null;
-  const subagentType = String(toolInput.subagent_type || "");
-
-  // Anchor to the reviewer subagent_type. The consolidator's prompt
-  // legitimately references subagent-N.json paths (its job is to read
-  // reviewer outputs), so prompt-text heuristics false-positive on it. Match
-  // only when subagent_type ends in "forge-reviewer" or "reviewer" — never
-  // when it ends in "forge-consolidator".
-  const isReviewer = /(?:^|[:\/])(?:forge-)?reviewer$/.test(subagentType);
-  if (!isReviewer) return null;
-
-  if (!forgeRoot) {
-    const possibleForge = resolve(process.cwd(), ".forge");
-    if (!existsSync(possibleForge)) return null;
-    forgeRoot = possibleForge;
-  }
-
-  const state = readState(forgeRoot);
-  if (!state) return null;
-  const phase = state.phase || "";
-  if (phase !== "consolidated-review") return null;
-
-  const cycleN = state.current_cycle || state.currentCycle || 1;
-  const reviewersDir = resolve(forgeRoot, "cycles", String(cycleN), "reviewers");
-  if (!existsSync(reviewersDir)) return null;
-
-  // Find any subagent-*.json that already exists
-  let entries = [];
-  try {
-    entries = readdirSync(reviewersDir).filter((n) => /^subagent-\d+\.json$/.test(n));
-  } catch {
-    return null;
-  }
-  if (entries.length === 0) return null;
-
-  // If any output is older than 5 seconds, this dispatch is serial
-  const now = Date.now();
-  const FIVE_SEC = 5000;
-  for (const f of entries) {
-    const p = join(reviewersDir, f);
-    try {
-      const m = statSync(p).mtimeMs;
-      if (now - m > FIVE_SEC) {
-        return [
-          "[BLOCK] Forge Guard: serial reviewer dispatch detected",
-          "",
-          `Cycle ${cycleN} is in consolidated-review and ${entries.length} reviewer output(s)`,
-          `already exist. The most recent landed >${Math.round((now - m) / 1000)}s ago.`,
-          "",
-          `Dispatching another reviewer now is serial, not parallel.`,
-          "",
-          "Reviewers must be dispatched in a single assistant turn (N parallel",
-          "Agent tool calls in one message) so they reason independently of",
-          "each other's outputs. See spec §4.3 for why this is load-bearing.",
-        ].join("\n");
-      }
-    } catch { /* skip */ }
-  }
-  return null;
-}
-
-/**
- * Rule 7 (v0.2.0 §8 rule 7): Implementer-worker fan-out enforcement.
- *
- * During green phase, blocks a second `implementer-worker` Task dispatch
- * fired after another worker's candidate directory already exists. The
- * coordinator must dispatch all N workers in a single assistant turn so
- * they remain independent. Same single-turn-dispatch heuristic as the
- * existing reviewer fan-out rule.
- */
-function checkWorkerFanout(toolInput, forgeRoot) {
-  if (!toolInput) return null;
-  const subagentType = String(toolInput.subagent_type || "");
-
-  // Anchor to the implementer-worker subagent_type. The implementer
-  // coordinator's prompt legitimately references candidates/worker-K/ (it
-  // reads each candidate's manifest), so prompt-text heuristics false-
-  // positive on the coordinator. Match only the worker subagent_type.
-  const isWorker = /(?:^|[:\/])(?:forge-)?implementer-worker$/.test(subagentType);
-  if (!isWorker) return null;
-
-  if (!forgeRoot) {
-    const possibleForge = resolve(process.cwd(), ".forge");
-    if (!existsSync(possibleForge)) return null;
-    forgeRoot = possibleForge;
-  }
-
-  const state = readState(forgeRoot);
-  if (!state) return null;
-  if ((state.phase || "") !== "green") return null;
-
-  const cycleN = state.current_cycle || state.currentCycle || 1;
-  const candidatesDir = resolve(
-    forgeRoot,
-    "cycles",
-    String(cycleN),
-    "green",
-    "candidates"
-  );
-  if (!existsSync(candidatesDir)) return null;
-
-  let entries = [];
-  try {
-    entries = readdirSync(candidatesDir).filter((n) => /^worker-\d+$/.test(n));
-  } catch {
-    return null;
-  }
-  if (entries.length === 0) return null;
-
-  const now = Date.now();
-  const FIVE_SEC = 5000;
-  for (const dir of entries) {
-    const p = join(candidatesDir, dir);
-    try {
-      const m = statSync(p).mtimeMs;
-      if (now - m > FIVE_SEC) {
-        return [
-          "[BLOCK] Forge Guard: serial implementer-worker dispatch detected",
-          "",
-          `Cycle ${cycleN} is in green phase and ${entries.length} worker candidate(s)`,
-          `already exist. The most recent landed >${Math.round((now - m) / 1000)}s ago.`,
-          "",
-          "Dispatching another worker now is serial, not parallel. The",
-          "coordinator must dispatch all N workers in a single assistant turn",
-          "(N parallel Agent calls in one message) so candidates are produced",
-          "independently. See spec §4.6.",
-        ].join("\n");
-      }
-    } catch { /* skip */ }
-  }
-  return null;
-}
-
-/**
- * Rule 6 (v0.2.0 §8 rule 6): Specialist routing.
- *
- * When `agent-config.md` is present in the forge root, enforce two layers of
- * routing on PreToolUse(Task):
- *
- *   - If `project_domains` contains "sui-dapp" (or any other compound domain
- *     that maps to a specialist), every Task dispatch must use that
- *     specialist's subagent_type. Hard-block mismatches.
- *   - Otherwise, walk `required_subagents[*].match` globs against the
- *     dispatch's likely target file (description/prompt heuristic) and
- *     require the matching subagent_type when one is implied.
- *
- * Skips when no agent-config.md exists (greenfield, no specialist needed) or
- * when the file's frontmatter is unparseable.
- */
-function checkSpecialistRouting(toolInput, forgeRoot) {
-  if (!toolInput) return null;
-  if (!forgeRoot) {
-    const possibleForge = resolve(process.cwd(), ".forge");
-    if (!existsSync(possibleForge)) return null;
-    forgeRoot = possibleForge;
-  }
-  const cfgPath = resolve(forgeRoot, "agent-config.md");
-  if (!existsSync(cfgPath)) return null;
-
-  const fm = readYamlFrontmatterRaw(cfgPath);
-  if (!fm) return null;
-
-  const domains = parseYamlList(fm, "project_domains");
-  const required = parseRequiredSubagents(fm);
-
-  const subagentType = String(toolInput.subagent_type || "");
-
-  // Project-domain rule: a sui-ecosystem domain forces sui-pilot ONLY for
-  // roles that actually edit or review source files. Orchestration roles
-  // (planner, test-author, implementer-coordinator, consolidator,
-  // codebase-explorer) need their own tool surfaces — sui-pilot lacks
-  // mcp__codex__codex (planner G2.5), Agent (implementer-coordinator's
-  // 6-worker fan-out), and other role-specific affordances. Forcing them
-  // would break the orchestration backbone. The domain force still applies
-  // to implementer-worker (writes code) and reviewer (reads code with
-  // domain knowledge); per-glob `required_subagents` continues to bind
-  // Move artifacts via its own enforcement path.
-  const SUI_DOMAINS = new Set(["sui-dapp", "walrus", "seal", "sui-cli"]);
-  const suiDomainPresent = domains.some((d) => SUI_DOMAINS.has(d));
-
-  // Roles that the project-domain rule applies to. Anchored on the role
-  // suffix (post-namespace) so it works with `code-forge:forge-X` and
-  // any future namespacing.
-  const DOMAIN_FORCED_ROLES = new Set(["implementer-worker", "reviewer"]);
-
-  if (suiDomainPresent) {
-    const role = inferRoleFromTaskInput(toolInput);
-    if (role && DOMAIN_FORCED_ROLES.has(role)) {
-      const expected = "sui-pilot:sui-pilot-agent";
-      if (subagentType !== expected) {
-        return [
-          "[BLOCK] Forge Guard: specialist routing violated (project_domains)",
-          "",
-          `agent-config.md declares project_domains: ${JSON.stringify(domains)}`,
-          `which forces source-touching roles (implementer-worker, reviewer) to`,
-          `use subagent_type="${expected}".`,
-          "",
-          `This Task call: role="${role}", subagent_type="${subagentType || "<unset>"}".`,
-          "",
-          "Re-dispatch with the correct subagent_type. Role-specific behavior is",
-          "delivered by embedding the role prompt in the Task call's prompt",
-          "parameter (see spec §4.7.2). The subagent_type itself stays sui-pilot.",
-        ].join("\n");
-      }
-      return null;
-    }
-    // Orchestration role (planner, test-author, implementer-coordinator,
-    // consolidator, codebase-explorer) — exempt from the domain force; falls
-    // through to the required_subagents glob check below for any per-file
-    // bindings (e.g. `**/*.move` → sui-pilot still applies when an orchestration
-    // role's dispatch target IS a Move file, which is rare but possible).
-  }
-
-  // No project_domain → fall back to required_subagents glob matches.
-  if (required.length === 0) return null;
-
-  // F12 (v0.4.x): match globs against the in-scope file list from the current
-  // cycle's contract.md, not against path-shaped tokens scraped from the
-  // dispatch prompt. Contract.md is authoritative; the prompt is incidental.
-  // Pre-cycle dispatches (current_cycle = 0 / no contract yet) skip the rule.
-  const state = readState(forgeRoot);
-  if (!state) return null;
-  const cycleN = Number(state.current_cycle || state.currentCycle || 0);
-  if (cycleN === 0) return null;
-  const contractPath = resolve(forgeRoot, "cycles", String(cycleN), "contract.md");
-  const contractTargets = listFilesInContract(contractPath);
-  if (contractTargets.length === 0) return null;
-
-  const dispatchRole = inferRoleFromTaskInput(toolInput);
-
-  for (const entry of required) {
-    if (!entry.match || !entry.subagent_type) continue;
-    // Honor applies_to: a binding scoped to specific roles only fires when
-    // we can identify the role and it matches. If applies_to is unset, the
-    // binding applies to all roles.
-    if (Array.isArray(entry.applies_to) && entry.applies_to.length > 0) {
-      if (!dispatchRole || !entry.applies_to.includes(dispatchRole)) continue;
-    }
-    // Match if ANY in-scope file from the contract hits this glob.
-    const matched = contractTargets.find((t) => matchesGlob(entry.match, t));
-    if (matched) {
-      if (subagentType !== entry.subagent_type) {
-        return [
-          "[BLOCK] Forge Guard: specialist routing violated (required_subagents)",
-          "",
-          `agent-config.md binds match="${entry.match}" → subagent_type="${entry.subagent_type}".`,
-          `Cycle ${cycleN}'s contract.md ## Files contains: "${matched}".`,
-          dispatchRole ? `Inferred role: "${dispatchRole}".` : "",
-          "",
-          `This Task call uses subagent_type="${subagentType || "<unset>"}".`,
-          "",
-          "Re-dispatch with the bound subagent_type, or update agent-config.md if",
-          "the binding no longer reflects the intended routing.",
-        ].filter(Boolean).join("\n");
-      }
-      // First matching binding is authoritative.
-      return null;
-    }
-  }
-  return null;
-}
-
-// Best-effort role inference from a Task dispatch. Order: subagent_type
-// suffix (e.g. "code-forge:forge-implementer-worker" → "implementer-worker"),
-// then a phrase in the prompt/description ("as planner", "as test-author",
-// etc.), then null. Used only to scope applies_to in routing rules.
-function inferRoleFromTaskInput(toolInput) {
-  const subagentType = String(toolInput.subagent_type || "");
-  if (subagentType) {
-    const m = /(?:^|[:\/])forge-([a-z-]+)$/.exec(subagentType);
-    if (m) return m[1];
-  }
-  const haystack = `${toolInput.description || ""}\n${toolInput.prompt || ""}`;
-  const ROLES = [
-    "planner", "implementer-worker", "implementer", "test-author",
-    "reviewer", "consolidator", "codebase-explorer",
-  ];
-  for (const role of ROLES) {
-    const re = new RegExp(`\\bas[\\s:]+${role}\\b|\\b${role}\\b`, "i");
-    if (re.test(haystack)) return role;
-  }
-  return null;
-}
-
-// --- agent-config.md helpers (lightweight YAML for the schema we own) ---
-
-function parseYamlList(fm, key) {
-  // Match either `key: [a, b]` flow style or block style with `- ` items.
-  const inlineRe = new RegExp(`^${key}:\\s*\\[(.*?)\\]\\s*$`, "m");
-  const inline = inlineRe.exec(fm);
-  if (inline) {
-    return inline[1]
-      .split(",")
-      .map((s) => s.trim().replace(/^["']|["']$/g, ""))
-      .filter(Boolean);
-  }
-  const blockRe = new RegExp(`^${key}:\\s*$([\\s\\S]*?)(?=^[a-z_]+:|\\Z)`, "im");
-  const block = blockRe.exec(fm);
-  if (!block) return [];
-  return block[1]
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("- "))
-    .map((line) => {
-      // Strip "- ", trailing inline comment, and surrounding quotes.
-      let v = line.slice(2);
-      const hash = v.indexOf("#");
-      if (hash >= 0) v = v.slice(0, hash);
-      v = v.trim().replace(/^["']|["']$/g, "");
-      return v;
-    })
-    .filter((s) => s && !s.startsWith("#"));
-}
-
-function parseRequiredSubagents(fm) {
-  // Walk a block-style YAML list of mappings. Accepts two shapes:
-  //
-  //   1. Same-line: `- match: "..."` opens an entry AND parses the field;
-  //      subsequent indented `subagent_type:` / `applies_to:` lines populate it.
-  //
-  //   2. Multi-line (F13): a bare `-` on its own line opens an empty entry;
-  //      every field (including `match`) arrives on subsequent indented lines.
-  //
-  // Entries with no `match` field are dropped at the end (parser saw a bare
-  // dash but no field lines followed).
-  const out = [];
-  const lines = fm.split("\n");
-  let inSection = false;
-  let current = null;
-  const flush = () => { if (current) { out.push(current); current = null; } };
-
-  for (const raw of lines) {
-    const line = raw.replace(/\s+$/, "");
-    if (/^required_subagents:\s*$/.test(line)) {
-      inSection = true;
-      continue;
-    }
-    if (!inSection) continue;
-
-    // Section ends when a new top-level key appears (column 0, ends in ':').
-    if (/^[A-Za-z_][A-Za-z0-9_]*:/.test(line)) {
-      flush();
-      inSection = false;
-      break;
-    }
-
-    // Same-line: `- match: "..."` opens an entry AND parses the field.
-    const sameLineStart = /^\s*-\s*match:\s*"?([^"#]+?)"?\s*(#.*)?$/.exec(line);
-    if (sameLineStart) {
-      flush();
-      current = { match: sameLineStart[1].trim() };
-      continue;
-    }
-
-    // Multi-line: bare `-` on its own line opens an empty entry.
-    if (/^\s*-\s*$/.test(line)) {
-      flush();
-      current = {};
-      continue;
-    }
-
-    // Indented k:v under the current entry.
-    if (!current) continue;
-    const matchKv = /^\s+match:\s*"?([^"#]+?)"?\s*(#.*)?$/.exec(line);
-    if (matchKv) { current.match = matchKv[1].trim(); continue; }
-    const subAgentMatch = /^\s+subagent_type:\s*"?([^"#]+?)"?\s*(#.*)?$/.exec(line);
-    if (subAgentMatch) { current.subagent_type = subAgentMatch[1].trim(); continue; }
-    const appliesMatch = /^\s+applies_to:\s*\[(.*?)\]\s*(#.*)?$/.exec(line);
-    if (appliesMatch) {
-      current.applies_to = appliesMatch[1]
-        .split(",")
-        .map((s) => s.trim().replace(/^["']|["']$/g, ""))
-        .filter(Boolean);
-      continue;
-    }
-  }
-  flush();
-  // Drop entries with no `match` (caller's contract is to filter out malformed
-  // bindings rather than silently no-op them at the call site).
-  return out.filter((e) => e.match);
-}
-
-function matchesGlob(pattern, target) {
-  // Tiny glob: supports `**/*.ext`, `*.ext`, `?`, and literals. Sufficient
-  // for the small fixed set of patterns in agent-config.md.
-  const escapeRe = (s) => s.replace(/[.+^$()|[\]\\]/g, "\\$&");
-  let re = "";
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i];
-    if (ch === "*" && pattern[i + 1] === "*") {
-      re += ".*";
-      i += 2;
-      if (pattern[i] === "/") i += 1;
-    } else if (ch === "*") {
-      re += "[^/]*";
-      i += 1;
-    } else if (ch === "?") {
-      re += "[^/]";
-      i += 1;
-    } else {
-      re += escapeRe(ch);
-      i += 1;
-    }
-  }
-  return new RegExp(`^${re}$`).test(target);
-}
-
-/**
- * Rule 7: Post-cycle freeze.
- * Once cycle N's _consolidated.json is sealed (cycle-pass.sh would return 0),
- * block edits to files listed in cycle N's contract.md until cycle N+1's
- * contract phase begins.
- */
-function checkPostCycleFreeze(filePath, forgeRoot) {
-  if (!filePath || !forgeRoot) {
-    const possibleForge = resolve(process.cwd(), ".forge");
-    if (!existsSync(possibleForge)) return null;
-    forgeRoot = possibleForge;
-  }
-
-  const state = readState(forgeRoot);
-  if (!state) return null;
-  const phase = state.phase || "";
-  // Only enforce when we're between cycles (cycle finished review, not yet
-  // started next contract phase). If state.phase indicates a new cycle's
-  // contract has begun, the freeze is lifted.
-  // Heuristic: if phase is "consolidated-review" or "cycle" with cycle_status
-  // "complete", we are between cycles.
-  const cycleStatus = state.cycle_status || state.cycleStatus || "";
-  const inFreeze = phase === "consolidated-review" || cycleStatus === "complete";
-  if (!inFreeze) return null;
-
-  const currentCycle = parseInt(state.current_cycle || state.currentCycle || 0, 10);
-  if (!currentCycle) return null;
-
-  const cycleDir = resolve(forgeRoot, "cycles", String(currentCycle));
-  const consolidated = resolve(cycleDir, "_consolidated.json");
-  if (!existsSync(consolidated)) return null;
-
-  const contractPath = resolve(cycleDir, "contract.md");
-  const protectedFiles = listFilesInContract(contractPath);
-  if (protectedFiles.length === 0) return null;
-
-  const repoRoot = resolve(forgeRoot, "..");
-  const relPath = makeRepoRelative(filePath, repoRoot);
-
-  if (!protectedFiles.includes(relPath)) return null;
-
-  return [
-    "[BLOCK] Forge Guard: post-cycle freeze",
-    "",
-    `Cycle ${currentCycle} has completed review. Files in its contract are`,
-    `frozen until the next cycle's contract phase begins.`,
-    "",
-    `Frozen path: ${relPath}`,
-    `Contract:    ${contractPath}`,
-    "",
-    "Spin a new cycle (write cycles/N+1/contract.md) before editing this file.",
-  ].join("\n");
-}
-
-/**
- * Rule 8: Auto-fire cycle-validate.sh on edits to schema-bearing artifacts.
- * Advisory (PostToolUse) — surfaces validation failures immediately rather
- * than blocking the edit.
- */
-function fireValidateOnSchemaArtifact(filePath, forgeRoot) {
-  if (!filePath) return null;
-  const name = basename(filePath);
-  const isSchemaArtifact =
-    name === "tests.json" ||
-    name === "contract.md" ||
-    /^subagent-\d+\.json$/.test(name);
-  if (!isSchemaArtifact) return null;
-
-  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
-  if (!pluginRoot) return null;
-  const validator = resolve(pluginRoot, "scripts/cycle-validate.sh");
-  if (!existsSync(validator)) return null;
-
-  try {
-    execFileSync("bash", [validator, filePath], {
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 4000,
-    });
-    return null; // OK
-  } catch (e) {
-    const stderr = e.stderr ? e.stderr.toString() : "";
-    const stdout = e.stdout ? e.stdout.toString() : "";
-    return [
-      `[ADVISE] Forge Guard: cycle-validate.sh failed for ${name}`,
-      "",
-      stdout.trim(),
-      stderr.trim(),
-      "",
-      "The artifact's schema does not match. The agent that wrote it should",
-      "re-emit a corrected version before the next phase begins.",
-    ].filter(Boolean).join("\n");
-  }
-}
-
-// --- Main ---
+// --- Main ----------------------------------------------------------------
 
 async function main() {
-  const hookType = process.argv[2]; // "pre-tool-use" or "post-tool-use"
-  const input = parseStdin();
-  if (!input) process.exit(0);
+  const hookType = process.argv[2]; // "pre-tool-use"
+  if (hookType !== "pre-tool-use") {
+    process.exit(0);
+  }
 
-  const toolName = input.tool_name || "";
-  const toolInput = input.tool_input || {};
+  const input = parseStdin();
+  if (input.kind === "empty") process.exit(0);
+  if (input.kind === "malformed") {
+    process.stderr.write(
+      `[BLOCK] Forge Guard: malformed PreToolUse payload — ${input.error}\n` +
+        "Refusing tool call rather than fail-open.\n"
+    );
+    process.exit(2);
+  }
+
+  const payload = input.value;
+  const toolName = payload.tool_name || "";
+  const toolInput = payload.tool_input || {};
   const filePath = toolInput.file_path;
   const forgeRoot = filePath ? findForgeRoot(filePath) : null;
 
-  if (hookType === "pre-tool-use") {
-    const violations = [];
+  const violations = [];
 
-    // Original invariants — only relevant for Edit/Write of forge artifacts
-    if ((toolName === "Edit" || toolName === "Write") && isForgeArtifact(filePath)) {
-      violations.push(checkContractExists(filePath));
-      violations.push(checkPreviousCyclePassed(filePath));
-    }
-
-    // v2 rule 5 — test-file edit during green (file may be outside .forge/)
-    if (toolName === "Edit" || toolName === "Write") {
-      violations.push(checkTestFileEditDuringGreen(filePath, forgeRoot));
-      violations.push(checkPostCycleFreeze(filePath, forgeRoot));
-    }
-
-    // F10 (v0.4.x): Bash file-writes to test_file paths during green close
-    // the side door that Edit/Write hooks miss. Heuristic-only.
-    if (toolName === "Bash") {
-      violations.push(checkBashFileWriteDuringGreen(toolInput, forgeRoot));
-    }
-
-    // v2 rule 3 — parallel reviewer fan-out
-    // v0.2.0 rule 6 — specialist routing per agent-config.md
-    // v0.2.0 rule 7 — parallel implementer-worker fan-out
-    if (toolName === "Task" || toolName === "Agent") {
-      violations.push(checkParallelReviewerFanout(toolInput, forgeRoot));
-      violations.push(checkSpecialistRouting(toolInput, forgeRoot));
-      violations.push(checkWorkerFanout(toolInput, forgeRoot));
-    }
-
-    const real = violations.filter(Boolean);
-    if (real.length > 0) {
-      process.stderr.write(real.join("\n\n---\n\n") + "\n");
-      process.exit(2);
-    }
-    process.exit(0);
+  if (toolName === "Edit" || toolName === "Write") {
+    violations.push(checkTestFileEditDuringGreen(filePath, forgeRoot));
+  }
+  if (toolName === "Bash") {
+    violations.push(checkBashFileWriteDuringGreen(toolInput, forgeRoot));
   }
 
-  if (hookType === "post-tool-use") {
-    const advisories = [];
-
-    // Original invariants (advisory) — phase transition + Codex gates fire
-    // on state.json / status.md writes.
-    if ((toolName === "Edit" || toolName === "Write") && filePath) {
-      // forgeRoot from filePath; if unset, derive from cwd
-      let root = forgeRoot;
-      if (!root) {
-        const candidate = resolve(process.cwd(), ".forge");
-        if (existsSync(candidate)) root = candidate;
-      }
-      advisories.push(checkPhaseTransitionV2(filePath, root));
-      advisories.push(checkCodexGatesV2(filePath, root));
-    }
-
-    // v2 rule 8 — auto-fire validation
-    if ((toolName === "Edit" || toolName === "Write") && filePath) {
-      advisories.push(fireValidateOnSchemaArtifact(filePath, forgeRoot));
-    }
-
-    const real = advisories.filter(Boolean);
-    if (real.length > 0) {
-      process.stderr.write(real.join("\n\n---\n\n") + "\n");
-    }
-    process.exit(0);
+  const real = violations.filter(Boolean);
+  if (real.length > 0) {
+    // Highest exitCode wins; messages joined.
+    const exitCode = Math.max(...real.map((v) => v.exitCode));
+    process.stderr.write(real.map((v) => v.error).join("\n\n---\n\n") + "\n");
+    process.exit(exitCode);
   }
-
   process.exit(0);
 }
 
-main().catch(() => process.exit(0));
+// Fail closed on any unexpected throw — silent exit-0 would let a test
+// mutation through during green, which is the precise failure mode the
+// guard exists to prevent.
+main().catch((err) => {
+  process.stderr.write(
+    `[BLOCK] Forge Guard: internal error — ${err && err.stack ? err.stack : err}\n` +
+      "Refusing tool call rather than fail-open. Investigate and re-run.\n"
+  );
+  process.exit(2);
+});

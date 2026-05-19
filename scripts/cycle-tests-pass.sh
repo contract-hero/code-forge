@@ -95,6 +95,27 @@ if [[ "$PHASE" == "red" ]] && [[ "$PHASE_PASS" == "false" ]]; then
   echo "  proceeding to green."
 fi
 
+# Red-phase positive-signal check. A non-zero test-runner exit can mean
+# either (a) tests actually ran and failed (good — red passes), or
+# (b) the test runner crashed before running any tests (config error,
+# missing dependency, parser error). Case (b) looks identical to (a)
+# from exit code alone and would let the cycle proceed to green with
+# zero actual coverage.
+#
+# This is a heuristic: if the log doesn't contain any of the common
+# test-failure markers, warn. Don't fail the script — the cycle child
+# can decide whether to roll back to test-list.
+if [[ "$PHASE" == "red" ]] && [[ "$PHASE_PASS" == "true" ]]; then
+  if ! grep -qiE 'fail|expected|assert|✗|✘|✕|test result' "$LOG" 2>/dev/null; then
+    echo ""
+    echo "WARN: red.log has no obvious test-failure markers (FAIL / Expected /"
+    echo "      assert / ✗ / 'test result' lines). The test runner exited"
+    echo "      non-zero, but the failure may be a crash or config error rather"
+    echo "      than tests-actually-failing. Read $LOG and confirm before"
+    echo "      proceeding to green."
+  fi
+fi
+
 if [[ "$PHASE" == "green" ]] && [[ "$PHASE_PASS" == "false" ]]; then
   echo ""
   echo "FAIL: green phase requires tests to pass (got exit code $TEST_EXIT)."

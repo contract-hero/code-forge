@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test for code-forge orchestration scripts.
+# Smoke test for code-forge v0.2.0 (Option D).
 # Exits 0 iff every assertion passes; non-zero on first failure.
 #
 # Usage: bash tests/smoke.sh
@@ -12,10 +12,12 @@ set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SCRIPTS="${PLUGIN_ROOT}/scripts"
+HOOK="${PLUGIN_ROOT}/hooks/forge-guard.mjs"
 FIXTURES="${SCRIPT_DIR}/fixtures"
 
 PASSED=0
 FAILED=0
+SKIPPED=0
 FAILURES=()
 
 assert() {
@@ -32,10 +34,17 @@ assert() {
   fi
 }
 
+# Convenience: feed a PreToolUse payload to the hook and assert exit code.
+run_hook() {
+  local label="$1"
+  local payload="$2"
+  local expected="$3"
+  local dir="${4:-$(pwd)}"
+  echo "$payload" | (cd "$dir" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+  assert "$label" "$?" "$expected"
+}
+
 # Stand up a temp dir with a green-phase .forge/ scaffolding for hook tests.
-# F11 made the hook itself realpath-aware, so we no longer need to canonicalize
-# the temp dir up-front. Returning the raw mktemp path lets the F11 assertion
-# exercise the symlink-crossing case for real.
 # Args: $1 test_file path; $2 optional target_file (default src/foo.ts).
 # Echoes the temp dir path; caller is responsible for `rm -rf` cleanup.
 setup_green_phase_fixture() {
@@ -45,14 +54,14 @@ setup_green_phase_fixture() {
   dir=$(mktemp -d)
   mkdir -p "${dir}/.forge/cycles/1"
   cat > "${dir}/.forge/state.json" << 'JSON'
-{ "phase": "green", "current_cycle": 1, "iteration": 0 }
+{ "phase": "green", "current_cycle": 1 }
 JSON
   printf '[{"id":"T-001","name":"x","behavior":"x","kind":"unit","target_file":"%s","test_file":"%s"}]\n' \
     "$target_file" "$test_file" > "${dir}/.forge/cycles/1/tests.json"
   echo "$dir"
 }
 
-echo "=== code-forge smoke test ==="
+echo "=== code-forge smoke test (Option D) ==="
 echo "Plugin root: $PLUGIN_ROOT"
 echo ""
 
@@ -62,6 +71,12 @@ command -v jq >/dev/null 2>&1
 assert "jq present"           "$?" "0"
 command -v node >/dev/null 2>&1
 assert "node present"         "$?" "0"
+[[ -x "${SCRIPTS}/forge.sh" ]]
+assert "forge.sh executable"  "$?" "0"
+[[ -f "${PLUGIN_ROOT}/templates/spec.md.template" ]]
+assert "spec.md.template present" "$?" "0"
+[[ -f "${PLUGIN_ROOT}/docs/goal-integration.md" ]]
+assert "docs/goal-integration.md present" "$?" "0"
 echo ""
 
 # --- cycle-validate.sh ---
@@ -74,79 +89,32 @@ assert "bad-tests-schema fixture rejects" "$?" "1"
 echo ""
 
 # --- F2: sed portability — reviewer-index extraction round-trip ---
-# Regression guard for the GNU-vs-BSD sed-ism on macOS. cycle-validate.sh
-# extracts a reviewer number from "subagent-N.json" basenames; before F2 it
-# used \+ which BSD sed silently no-ops, leaving N empty and skipping the
-# per-reviewer ID prefix check. This assertion proves the extractor returns
-# a non-empty digit string on the canonical fixture.
-echo "Section 1.5: sed portability"
+# Regression guard for the GNU-vs-BSD sed-ism on macOS.
+echo "Section 2: sed portability"
 n=$(basename "${FIXTURES}/cycle-good/reviewers/subagent-3.json" \
     | sed -n 's/^subagent-\([0-9][0-9]*\)\.json$/\1/p')
 [[ "$n" == "3" ]]
-assert "F2: reviewer-index extraction is non-empty on macOS" "$?" "0"
+assert "reviewer-index extraction is non-empty on macOS" "$?" "0"
 echo ""
 
-# --- cycle-consolidate.mjs ---
-echo "Section 2: cycle-consolidate.mjs"
-node "${SCRIPTS}/cycle-consolidate.mjs" "${FIXTURES}/cycle-good/reviewers" >/dev/null 2>&1
-assert "consolidate runs on good"         "$?" "0"
-
-CONSOLIDATED="${FIXTURES}/cycle-good/_consolidated.json"
-[[ -f "$CONSOLIDATED" ]]
-assert "consolidated file written"        "$?" "0"
-
-CLUSTER_COUNT=$(jq 'length' "$CONSOLIDATED" 2>/dev/null || echo "?")
-[[ "$CLUSTER_COUNT" -ge 1 ]] && echo "  PASS: consolidated has $CLUSTER_COUNT clusters" && PASSED=$((PASSED + 1)) \
-  || { echo "  FAIL: expected at least 1 cluster, got $CLUSTER_COUNT"; FAILED=$((FAILED + 1)); FAILURES+=("cluster count"); }
-echo ""
-
-# --- cycle-coverage.sh ---
-echo "Section 3: cycle-coverage.sh"
-bash "${SCRIPTS}/cycle-coverage.sh" "${FIXTURES}/cycle-good/reviewers" >/dev/null 2>&1
-assert "coverage runs on good"            "$?" "0"
-echo ""
-
-# --- cycle-pass.sh ---
-echo "Section 4: cycle-pass.sh"
-bash "${SCRIPTS}/cycle-pass.sh" "${FIXTURES}/cycle-good" >/dev/null 2>&1
-assert "good fixture passes"              "$?" "0"
-
-# Build a disputed _consolidated.json on the fly (smaller than a full fixture)
-DISPUTED_DIR="${FIXTURES}/cycle-bad-disputed"
-mkdir -p "$DISPUTED_DIR"
-cat > "${DISPUTED_DIR}/_consolidated.json" << 'JSON'
-[
-  {
-    "cluster_id": "C001",
-    "title": "Disputed severity test cluster",
-    "file": "src/x.ts",
-    "line_ranges": ["10-20"],
-    "agreement_count": 2,
-    "reviewers": [1, 3],
-    "max_severity": "critical",
-    "min_severity": "low",
-    "disputed_severity": true,
-    "categories": ["correctness"],
-    "recommendations": ["pick one"],
-    "descriptions": ["..."],
-    "impacts": ["..."],
-    "evidence": "...",
-    "confidence_spread": ["high", "low"],
-    "source_ids": ["R1-001", "R3-001"]
-  }
-]
-JSON
-bash "${SCRIPTS}/cycle-pass.sh" "${DISPUTED_DIR}" >/dev/null 2>&1
-assert "disputed fixture fails"           "$?" "1"
-echo ""
-
-# --- cycle-tests-pass.sh red-phase exit-code inversion ---
-echo "Section 5: cycle-tests-pass.sh (red-phase inversion)"
+# --- cycle-tests-pass.sh red-phase exit-code inversion + meta-JSON shape ---
+echo "Section 3: cycle-tests-pass.sh (red-phase inversion + meta schema)"
 TMPDIR=$(mktemp -d)
 
 # Tests that fail at red = phase passes (script exit 0)
-bash "${SCRIPTS}/cycle-tests-pass.sh" red "$TMPDIR" -- bash -c "exit 1" >/dev/null 2>&1
+bash "${SCRIPTS}/cycle-tests-pass.sh" red "$TMPDIR" -- bash -c "echo 'FAIL: assertion'; exit 1" >/dev/null 2>&1
 assert "red phase: failing tests => exit 0"  "$?" "0"
+
+# red.json shape: phase + exit_code (number) + phase_pass (boolean) + command
+red_meta_ok=$(jq -e '
+  .phase == "red" and
+  (.exit_code | type == "number") and
+  (.phase_pass | type == "boolean") and
+  (.command | type == "string") and (.command != "") and
+  (.started_at | type == "string") and
+  (.ended_at | type == "string")
+' "$TMPDIR/red.json" >/dev/null 2>&1 && echo ok || echo bad)
+assert "red.json meta schema valid"          "$red_meta_ok" "ok"
 
 # Tests that pass at red = phase fails (script exit 1)
 bash "${SCRIPTS}/cycle-tests-pass.sh" red "$TMPDIR" -- bash -c "exit 0" >/dev/null 2>&1
@@ -156,6 +124,12 @@ assert "red phase: passing tests => exit 1"  "$?" "1"
 bash "${SCRIPTS}/cycle-tests-pass.sh" green "$TMPDIR" -- bash -c "exit 0" >/dev/null 2>&1
 assert "green phase: passing tests => exit 0"  "$?" "0"
 
+green_meta_ok=$(jq -e '
+  .phase == "green" and (.exit_code | type == "number") and
+  (.phase_pass | type == "boolean") and (.command | type == "string")
+' "$TMPDIR/green.json" >/dev/null 2>&1 && echo ok || echo bad)
+assert "green.json meta schema valid"        "$green_meta_ok" "ok"
+
 bash "${SCRIPTS}/cycle-tests-pass.sh" green "$TMPDIR" -- bash -c "exit 1" >/dev/null 2>&1
 assert "green phase: failing tests => exit 1"  "$?" "1"
 
@@ -163,85 +137,91 @@ rm -rf "$TMPDIR"
 echo ""
 
 # --- cycle-init.sh ---
-echo "Section 6: cycle-init.sh"
+echo "Section 4: cycle-init.sh"
 INITDIR=$(mktemp -d)
-bash "${SCRIPTS}/cycle-init.sh" "${INITDIR}/cycle-99" >/dev/null 2>&1
-assert "cycle-init runs"                  "$?" "0"
-[[ -f "${INITDIR}/cycle-99/contract.md" ]]
-assert "contract.md scaffolded"           "$?" "0"
-[[ -f "${INITDIR}/cycle-99/tests.json" ]]
-assert "tests.json scaffolded"            "$?" "0"
-[[ -d "${INITDIR}/cycle-99/reviewers" ]]
-assert "reviewers/ scaffolded"            "$?" "0"
+bash "${SCRIPTS}/cycle-init.sh" "${INITDIR}/cycle-C1" >/dev/null 2>&1
+assert "cycle-init runs"                       "$?" "0"
+[[ -f "${INITDIR}/cycle-C1/tests.json" ]]
+assert "tests.json scaffolded"                 "$?" "0"
+[[ -d "${INITDIR}/cycle-C1/reviewers" ]]
+assert "reviewers/ scaffolded"                 "$?" "0"
+[[ -d "${INITDIR}/cycle-C1/green/candidates" ]]
+assert "green/candidates/ scaffolded"          "$?" "0"
+# Option D: cycle-init no longer scaffolds contract.md
+[[ ! -f "${INITDIR}/cycle-C1/contract.md" ]]
+assert "no contract.md scaffolded (Option D)"  "$?" "0"
 rm -rf "$INITDIR"
 echo ""
 
-# --- forge-status.sh (smoke check — just ensure it runs) ---
-echo "Section 7: forge-status.sh"
-bash "${SCRIPTS}/forge-status.sh" "${FIXTURES}/cycle-good" >/dev/null 2>&1 || true
-# Non-zero is fine; we just want it not to crash badly. Check via grep instead.
+# --- forge-status.sh ---
+echo "Section 5: forge-status.sh"
 OUT=$(bash "${SCRIPTS}/forge-status.sh" "${FIXTURES}/cycle-good" 2>/dev/null || true)
 echo "$OUT" | grep -q "Forge Status"
-assert "forge-status emits header"        "$?" "0"
+assert "forge-status emits header"             "$?" "0"
 echo ""
 
-# --- pre-cycle artifact validators (P2/P4 / v0.2.0) ---
-echo "Section 7.5: pre-cycle validators"
+# --- pre-cycle artifact validators ---
+echo "Section 6: pre-cycle validators"
 PC_DIR=$(mktemp -d)
 
 # Empty plan.md → reject
 : > "${PC_DIR}/plan.md"
 bash "${SCRIPTS}/cycle-validate.sh" "${PC_DIR}/plan.md" >/dev/null 2>&1
-assert "empty plan.md rejects"               "$?" "1"
+assert "empty plan.md rejects"                 "$?" "1"
 
 # Non-empty plan.md → accept
 echo -e "# Plan\n\nDoes things." > "${PC_DIR}/plan.md"
 bash "${SCRIPTS}/cycle-validate.sh" "${PC_DIR}/plan.md" >/dev/null 2>&1
-assert "non-empty plan.md validates"         "$?" "0"
+assert "non-empty plan.md validates"           "$?" "0"
 
-# Spec without ## E2E Tests → reject
+# Spec without ## Cycle Plan → reject (Option D requires the block)
 cat > "${PC_DIR}/spec.md" << 'SPECMD'
 # Project Spec
 
 ## Vision
 Do things.
 
-## Core Features
-- A thing.
-
-## Architecture Overview
+## Architecture
 Use code.
 SPECMD
 bash "${SCRIPTS}/cycle-validate.sh" "${PC_DIR}/spec.md" >/dev/null 2>&1
-assert "spec without E2E Tests rejects"      "$?" "1"
+assert "spec without Cycle Plan rejects"       "$?" "1"
 
-# Spec with ## E2E Tests → accept
-echo -e "\n## E2E Tests\n- E-001: thing happens" >> "${PC_DIR}/spec.md"
+# Spec with all required sections → accept
+cat >> "${PC_DIR}/spec.md" << 'SPECMD'
+
+## Acceptance Criteria
+- AC-001: thing must happen
+
+## E2E Tests
+- E-001: thing happens
+
+## Cycle Plan
+- id: C1
+  goal: bootstrap
+  files_affected: [src/foo.ts]
+  acceptance: [AC-001]
+
+## Reviewer Config
+model: opus
+dimensions:
+  - correctness
+SPECMD
 bash "${SCRIPTS}/cycle-validate.sh" "${PC_DIR}/spec.md" >/dev/null 2>&1
-assert "spec with E2E Tests validates"       "$?" "0"
-
-# cycle-plan.md without any '## Cycle' heading → reject
-echo "# Cycle Plan" > "${PC_DIR}/cycle-plan.md"
-bash "${SCRIPTS}/cycle-validate.sh" "${PC_DIR}/cycle-plan.md" >/dev/null 2>&1
-assert "cycle-plan without Cycle heading rejects" "$?" "1"
-
-# cycle-plan.md with cycles → accept
-echo -e "\n## Cycle 1 — bootstrap\n- Goal: do something" >> "${PC_DIR}/cycle-plan.md"
-bash "${SCRIPTS}/cycle-validate.sh" "${PC_DIR}/cycle-plan.md" >/dev/null 2>&1
-assert "cycle-plan with Cycle heading validates"  "$?" "0"
+assert "spec with Cycle Plan + Reviewer Config validates" "$?" "0"
 
 rm -rf "${PC_DIR}"
 echo ""
 
-# --- agent-config.md schema (P3 / v0.2.0) ---
-echo "Section 8: agent-config.md schema"
+# --- agent-config.md schema ---
+echo "Section 7: agent-config.md schema"
 bash "${SCRIPTS}/cycle-validate.sh" "${FIXTURES}/cycle-good/agent-config.md" >/dev/null 2>&1
-assert "greenfield agent-config validates"   "$?" "0"
+assert "greenfield agent-config validates"     "$?" "0"
 
 bash "${SCRIPTS}/cycle-validate.sh" "${FIXTURES}/cycle-good-sui/agent-config.md" >/dev/null 2>&1
-assert "sui agent-config validates"          "$?" "0"
+assert "sui agent-config validates"            "$?" "0"
 
-# Missing frontmatter rejection — file basename must be exactly agent-config.md
+# Missing frontmatter → reject
 BAD_AC_DIR=$(mktemp -d)
 echo "no frontmatter here" > "${BAD_AC_DIR}/agent-config.md"
 bash "${SCRIPTS}/cycle-validate.sh" "${BAD_AC_DIR}/agent-config.md" >/dev/null 2>&1
@@ -249,493 +229,554 @@ assert "missing-frontmatter agent-config rejects" "$?" "1"
 rm -rf "$BAD_AC_DIR"
 echo ""
 
-# --- best-of-N fixture (P5 / v0.2.0) ---
-echo "Section 8.5: best-of-N fixture"
+# --- best-of-N fixture (still relevant in Option D) ---
+echo "Section 8: best-of-N fixture"
 BON="${FIXTURES}/cycle-good-with-best-of-n"
 
-# Cycle artifacts validate (contract.md, tests.json)
-bash "${SCRIPTS}/cycle-validate.sh" "${BON}/contract.md" >/dev/null 2>&1
-assert "best-of-N contract.md validates"     "$?" "0"
 bash "${SCRIPTS}/cycle-validate.sh" "${BON}/tests.json" >/dev/null 2>&1
-assert "best-of-N tests.json validates"      "$?" "0"
+assert "best-of-N tests.json validates"        "$?" "0"
 
 # All six worker manifests exist
 worker_count=$(find "${BON}/green/candidates" -mindepth 1 -maxdepth 1 -type d -name 'worker-*' | wc -l | tr -d ' ')
 [[ "$worker_count" == "6" ]]
-assert "best-of-N has 6 worker dirs"         "$?" "0"
+assert "best-of-N has 6 worker dirs"           "$?" "0"
 
 manifest_count=$(find "${BON}/green/candidates" -name manifest.json | wc -l | tr -d ' ')
 [[ "$manifest_count" == "6" ]]
-assert "best-of-N has 6 manifests"           "$?" "0"
+assert "best-of-N has 6 manifests"             "$?" "0"
 
-# Synthesis notes mention the chosen worker
-grep -q '^worker-4' "${BON}/green/synthesis-notes.md"
-assert "synthesis-notes names a winner"      "$?" "0"
-
-# Coordinator pick metric: chosen worker's manifest claims tests_pass=true
-chosen_pass=$(jq -r '.tests_pass' "${BON}/green/candidates/worker-4/manifest.json")
-[[ "$chosen_pass" == "true" ]]
-assert "chosen worker passes tests"          "$?" "0"
-
-# Coordinator pick metric: chosen worker has the lowest LOC among passers
-chosen_loc=$(jq -r '.lines_changed' "${BON}/green/candidates/worker-4/manifest.json")
-min_loc=$(for K in 1 3 4 5; do jq -r '.lines_changed' "${BON}/green/candidates/worker-${K}/manifest.json"; done | sort -n | head -1)
-[[ "$chosen_loc" == "$min_loc" ]]
-assert "chosen worker has min LOC of passers" "$?" "0"
+# Every passer must have tests_pass=true, lines_changed an int, target_files a list.
+# (Verifies the manifest schema the cycle child's pick logic depends on.)
+manifest_shape_ok=$(jq -e '
+  .tests_pass != null and (.tests_pass | type == "boolean") and
+  .lines_changed != null and (.lines_changed | type == "number") and
+  .target_files != null and (.target_files | type == "array")
+' "${BON}/green/candidates/worker-4/manifest.json" >/dev/null 2>&1 && echo ok || echo bad)
+assert "worker manifest shape valid"           "$manifest_shape_ok" "ok"
 echo ""
 
-# --- forge-guard rule 6: specialist routing (P3 / v0.2.0) ---
-echo "Section 9: forge-guard rule 6 (specialist routing)"
-HOOK="${PLUGIN_ROOT}/hooks/forge-guard.mjs"
-GUARD_TEST_DIR=$(mktemp -d)
-mkdir -p "${GUARD_TEST_DIR}/.forge"
-cp "${FIXTURES}/cycle-good-sui/agent-config.md" "${GUARD_TEST_DIR}/.forge/agent-config.md"
+# --- forge-guard rule 5: test-file edit during green ---
+echo "Section 9: forge-guard rule 5 — test-file immutability"
+R5_DIR=$(setup_green_phase_fixture "tests/foo.test.ts")
 
-# F7 (v0.3.x): project_domains forces sui-pilot only for source-touching roles.
-# Orchestration roles (planner, test-author, implementer-coordinator, consolidator,
-# codebase-explorer) keep their own tool surfaces — sui-pilot lacks Codex MCP /
-# Agent / etc. that those roles depend on.
+# Hook BLOCKS Edit on a test_file path during green
+echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${R5_DIR}/tests/foo.test.ts\"}}" \
+  | (cd "${R5_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "blocks edit on test_file"              "$?" "2"
 
-# Source-touching role mismatched → BLOCK
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge:forge-implementer-worker","prompt":"impl-worker on src/foo.move","description":"x"}}' \
-  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-# subagent_type doesn't match sui-pilot → blocks (because role IS implementer-worker, IS forced)
-# But wait — subagent_type IS code-forge:forge-implementer-worker, not sui-pilot.
-# That's the violation. Expect exit 2.
-assert "F7: implementer-worker without sui-pilot blocks" "$?" "2"
+# Hook ALLOWS Edit on a target_file source path during green
+echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${R5_DIR}/src/foo.ts\"}}" \
+  | (cd "${R5_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
+assert "allows edit on target_file"            "$?" "0"
 
-# Source-touching role with sui-pilot → ALLOW
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"sui-pilot:sui-pilot-agent","prompt":"as implementer-worker, edit src/foo.move","description":"x"}}' \
-  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F7: implementer-worker with sui-pilot allows" "$?" "0"
+# Schema validation rejects tests.json missing test_file
+printf '[{"id":"T-001","name":"x","behavior":"x","kind":"unit","target_file":"src/foo.ts"}]\n' \
+  > "${R5_DIR}/.forge/cycles/1/tests.json"
+bash "${SCRIPTS}/cycle-validate.sh" "${R5_DIR}/.forge/cycles/1/tests.json" >/dev/null 2>&1
+assert "tests.json without test_file rejects"  "$?" "1"
 
-# Reviewer dispatch without sui-pilot → BLOCK
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge:forge-reviewer","prompt":"REVIEWER_DIMENSION=correctness; review src/foo.move","description":"reviewer"}}' \
-  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-# reviewer mismatch → BLOCK by F7. (rule 3 also fires? No — no prior subagent-N.json files yet.)
-assert "F7: reviewer without sui-pilot blocks" "$?" "2"
-
-# F7 critical: orchestration roles ALLOWED through project_domains rule.
-# These need their own tool surfaces (Codex MCP, Agent), so sui-pilot would break them.
-# planner dispatch (orchestration) under project_domains: [sui-dapp] → ALLOW
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge:forge-planner","prompt":"draft contract.md for cycle 1","description":"planner contract"}}' \
-  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F7: planner orchestration role allowed under sui-dapp" "$?" "0"
-
-# implementer-coordinator dispatch (orchestration) under project_domains: [sui-dapp] → ALLOW
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge:forge-implementer","prompt":"green-phase coordinator: dispatch 6 workers","description":"implementer coord"}}' \
-  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F7: implementer coordinator allowed under sui-dapp" "$?" "0"
-
-# consolidator dispatch (orchestration) → ALLOW (matches F5 + F7 logic)
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge:forge-consolidator","prompt":"synthesize subagent-N.json into review.md","description":"consolidator"}}' \
-  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F7: consolidator allowed under sui-dapp" "$?" "0"
-
-# Greenfield agent-config (empty project_domains, empty required) + arbitrary subagent → ALLOW
-cp "${FIXTURES}/cycle-good/agent-config.md" "${GUARD_TEST_DIR}/.forge/agent-config.md"
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","prompt":"do work","description":"x"}}' \
-  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "greenfield routing skips"            "$?" "0"
-
-# F12 (v0.4.x): required_subagents glob fallback now matches against the in-scope
-# files listed in cycles/N/contract.md, not prompt-text path tokens. Set up a
-# minimal state.json + contract.md so the rule has something to read.
-cat > "${GUARD_TEST_DIR}/.forge/agent-config.md" << 'EOF'
----
-project_domains: []
-required_subagents:
-  - match: "**/*.move"
-    subagent_type: "sui-pilot:sui-pilot-agent"
-    applies_to: [planner, implementer-worker, reviewer]
-recommended_agents: []
----
-EOF
-mkdir -p "${GUARD_TEST_DIR}/.forge/cycles/1"
-cat > "${GUARD_TEST_DIR}/.forge/state.json" << 'JSON'
-{ "phase": "contract", "current_cycle": 1, "iteration": 0 }
-JSON
-cat > "${GUARD_TEST_DIR}/.forge/cycles/1/contract.md" << 'EOF'
-# Cycle 1 — sui contract
-
-## Behavior
-Add a Move module that does X.
-
-## Files
-- src/foo.move
-- src/index.ts
-
-## Acceptance
-- foo.move compiles.
-EOF
-
-# F12: contract lists a .move file → glob match → impl-worker without sui-pilot BLOCKS
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge:forge-implementer-worker","prompt":"impl-worker","description":"x"}}' \
-  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F12: glob fallback blocks via contract.md" "$?" "2"
-
-# F12: same glob, but applies_to scope excludes consolidator → ALLOW
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge:forge-consolidator","prompt":"consolidator","description":"x"}}' \
-  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F12: applies_to scope respected" "$?" "0"
-
-# F12: pre-cycle dispatch (current_cycle=0, no contract.md to read) → SKIP rule, ALLOW
-cat > "${GUARD_TEST_DIR}/.forge/state.json" << 'JSON'
-{ "phase": "spec-and-e2e", "current_cycle": 0, "iteration": 0 }
-JSON
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge:forge-planner","prompt":"draft spec.md","description":"planner"}}' \
-  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F12: pre-cycle dispatch skips rule"  "$?" "0"
-
-# F12: contract has no matching files → ALLOW (no .move in this contract)
-cat > "${GUARD_TEST_DIR}/.forge/state.json" << 'JSON'
-{ "phase": "contract", "current_cycle": 1, "iteration": 0 }
-JSON
-cat > "${GUARD_TEST_DIR}/.forge/cycles/1/contract.md" << 'EOF'
-# Cycle 1 — pure TS contract
-
-## Behavior
-Add a TypeScript helper.
-
-## Files
-- src/foo.ts
-- tests/foo.test.ts
-
-## Acceptance
-- helper does Y.
-EOF
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","prompt":"impl-worker","description":"x"}}' \
-  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F12: contract with no matching file allows" "$?" "0"
-
-# F13 (v0.4.x): parseRequiredSubagents accepts the multi-line YAML shape
-# (bare `-` on its own line, with all fields on subsequent indented lines).
-# Reset state.json + contract.md back to the Sui contract to give the binding
-# something to match against.
-cat > "${GUARD_TEST_DIR}/.forge/state.json" << 'JSON'
-{ "phase": "contract", "current_cycle": 1, "iteration": 0 }
-JSON
-cat > "${GUARD_TEST_DIR}/.forge/cycles/1/contract.md" << 'EOF'
-# Cycle 1 — sui contract
-
-## Behavior
-Move module.
-
-## Files
-- src/foo.move
-- src/index.ts
-
-## Acceptance
-- foo.move compiles.
-EOF
-cat > "${GUARD_TEST_DIR}/.forge/agent-config.md" << 'EOF'
----
-project_domains: []
-required_subagents:
-  -
-    match: "**/*.move"
-    subagent_type: "sui-pilot:sui-pilot-agent"
-    applies_to: [planner, implementer-worker, reviewer]
-recommended_agents: []
----
-EOF
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge:forge-implementer-worker","prompt":"impl-worker","description":"x"}}' \
-  | (cd "${GUARD_TEST_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F13: multi-line YAML binding is parsed and applied" "$?" "2"
-
-rm -rf "$GUARD_TEST_DIR"
+rm -rf "$R5_DIR"
 echo ""
 
-# --- forge-guard rule 7: implementer-worker fan-out (P5 / v0.2.0) ---
-echo "Section 10: forge-guard rule 7 (worker fan-out)"
-W7="$(mktemp -d)"
-mkdir -p "${W7}/.forge/cycles/1/green/candidates/worker-1"
-cat > "${W7}/.forge/state.json" << 'JSON'
-{ "phase": "green", "current_cycle": 1, "iteration": 0 }
-JSON
-
-# Worker-1 candidate dir already exists with old mtime — second worker dispatch should block
-touch -t 200001010000 "${W7}/.forge/cycles/1/green/candidates/worker-1"
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge:forge-implementer-worker","prompt":"stage your candidate at green/candidates/worker-2","description":"impl worker"}}' \
-  | (cd "${W7}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "rule 7 blocks serial worker dispatch" "$?" "2"
-
-# Fresh candidate dir (just created) — should NOT block
-W7B="$(mktemp -d)"
-mkdir -p "${W7B}/.forge/cycles/1/green/candidates/worker-1"
-cat > "${W7B}/.forge/state.json" << 'JSON'
-{ "phase": "green", "current_cycle": 1, "iteration": 0 }
-JSON
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge:forge-implementer-worker","prompt":"stage your candidate at green/candidates/worker-2","description":"impl worker"}}' \
-  | (cd "${W7B}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "rule 7 allows in-turn worker dispatch" "$?" "0"
-
-# Not in green phase — rule 7 should not apply even with old worker dir
-W7C="$(mktemp -d)"
-mkdir -p "${W7C}/.forge/cycles/1/green/candidates/worker-1"
-touch -t 200001010000 "${W7C}/.forge/cycles/1/green/candidates/worker-1"
-cat > "${W7C}/.forge/state.json" << 'JSON'
-{ "phase": "test-list", "current_cycle": 1, "iteration": 0 }
-JSON
-echo '{"tool_name":"Task","tool_input":{"subagent_type":"code-forge:forge-implementer-worker","prompt":"hi","description":"impl worker"}}' \
-  | (cd "${W7C}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "rule 7 skips outside green phase"     "$?" "0"
-
-rm -rf "$W7" "$W7B" "$W7C"
-echo ""
-
-# --- F4: worker candidate-prefix peel for test-file blocking ---
-echo "Section 10.5: F4 — candidate-staging prefix peel"
+# --- candidate-staging prefix peel ---
+echo "Section 10: worker candidate-staging prefix peel"
 F4_DIR=$(setup_green_phase_fixture "test/strip-ansi.test.ts" "src/strip-ansi.ts")
 mkdir -p "${F4_DIR}/.forge/cycles/1/green/candidates/worker-3/files"
 
-# Worker writing to a test_file path INSIDE its candidate dir → BLOCK
+# Worker writing to a test_file path inside its candidate dir → BLOCK
 echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${F4_DIR}/.forge/cycles/1/green/candidates/worker-3/files/test/strip-ansi.test.ts\"}}" \
   | (cd "${F4_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F4: hook blocks worker test-file edit"  "$?" "2"
+assert "blocks worker test-file edit"          "$?" "2"
 
 # Worker writing to a target_file source path inside its candidate dir → ALLOW
 echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${F4_DIR}/.forge/cycles/1/green/candidates/worker-3/files/src/strip-ansi.ts\"}}" \
   | (cd "${F4_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F4: hook allows worker source edit"     "$?" "0"
+assert "allows worker source edit"             "$?" "0"
 
 rm -rf "$F4_DIR"
 echo ""
 
-# --- target_file/test_file schema split (F1 / v0.3.x) ---
-echo "Section 11.5: F1 — test_file hook block"
-F1_DIR=$(setup_green_phase_fixture "tests/foo.test.ts")
-
-# Hook BLOCKS Edit on a test_file path during green
-echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${F1_DIR}/tests/foo.test.ts\"}}" \
-  | (cd "${F1_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F1: hook blocks edit on test_file"   "$?" "2"
-
-# Hook ALLOWS Edit on a target_file source path during green (anti-weakening only blocks tests)
-echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${F1_DIR}/src/foo.ts\"}}" \
-  | (cd "${F1_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F1: hook allows edit on target_file" "$?" "0"
-
-# Schema validation rejects tests.json missing test_file
-printf '[{"id":"T-001","name":"x","behavior":"x","kind":"unit","target_file":"src/foo.ts"}]\n' \
-  > "${F1_DIR}/.forge/cycles/1/tests.json"
-bash "${SCRIPTS}/cycle-validate.sh" "${F1_DIR}/.forge/cycles/1/tests.json" >/dev/null 2>&1
-assert "F1: tests.json without test_file rejects" "$?" "1"
-
-rm -rf "$F1_DIR"
-echo ""
-
-# --- F11: realpath in makeRepoRelative (macOS /var → /private/var) ---
-# setup_green_phase_fixture now returns the raw mktemp path. On macOS that's
-# typically /var/folders/... whose canonical form is /private/var/folders/...
-# Pre-F11, the hook's string-prefix compare missed the match because cwd
-# resolved the symlink but file_path didn't. Post-F11, makeRepoRelative
-# realpaths both sides — this assertion proves the block fires correctly even
-# with a symlink-crossing path.
-echo "Section 11.6: F11 — realpath path normalization"
+# --- realpath path normalization (macOS /var → /private/var) ---
+echo "Section 11: realpath normalization (macOS symlink crossing)"
 F11_DIR=$(setup_green_phase_fixture "tests/foo.test.ts")
-# Sanity: confirm we're actually exercising the symlink case on macOS.
 F11_REAL=$(cd "$F11_DIR" && pwd -P)
 if [[ "$F11_DIR" == "$F11_REAL" ]]; then
-  echo "  SKIP: F11 case (no symlink in temp-dir path; nothing to exercise here)"
+  echo "  SKIP: no symlink in temp-dir path; nothing to exercise here"
+  SKIPPED=$((SKIPPED + 1))
 else
   echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${F11_DIR}/tests/foo.test.ts\"}}" \
     | (cd "${F11_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-  assert "F11: hook blocks across /var symlink"  "$?" "2"
+  assert "blocks across /var symlink"          "$?" "2"
 fi
 rm -rf "$F11_DIR"
 echo ""
 
-# --- F8: forge-implementer is a procedure manual (mirrors F6's pattern) ---
-echo "Section 11.7: F8 — forge-implementer halt-stub"
-grep -q "procedure manual, not a dispatchable" "${PLUGIN_ROOT}/agents/implementer.md"
-assert "F8: implementer.md declares procedure-manual halt-stub" "$?" "0"
-grep -q "tools: Read, Bash" "${PLUGIN_ROOT}/agents/implementer.md"
-assert "F8: implementer.md tools narrowed to Read, Bash"        "$?" "0"
-echo ""
-
-# --- F9: paused / pause_history schema + forge-status banner ---
-echo "Section 11.8: F9 — paused state schema"
-F9_DIR=$(mktemp -d)
-
-# Valid paused state.json validates
-cat > "${F9_DIR}/state.json" << 'JSON'
-{
-  "phase": "cycle-plan",
-  "current_cycle": 0,
-  "total_cycles": 0,
-  "paused": true,
-  "pause_history": [
-    {
-      "paused_at": "2026-04-27T19:50:00Z",
-      "reason": "G-Boot failed: pnpm deploy-all errors",
-      "gate": "G-Boot"
-    }
-  ]
-}
-JSON
-bash "${SCRIPTS}/cycle-validate.sh" "${F9_DIR}/state.json" >/dev/null 2>&1
-assert "F9: valid paused state.json validates" "$?" "0"
-
-# v0.3.x state.json (no paused/pause_history) still validates
-cat > "${F9_DIR}/state.json" << 'JSON'
-{
-  "phase": "green",
-  "current_cycle": 1,
-  "iteration": 0
-}
-JSON
-bash "${SCRIPTS}/cycle-validate.sh" "${F9_DIR}/state.json" >/dev/null 2>&1
-assert "F9: v0.3.x state.json (no paused fields) still validates" "$?" "0"
-
-# pause_history entry missing required field → reject
-cat > "${F9_DIR}/state.json" << 'JSON'
-{
-  "phase": "cycle-plan",
-  "paused": true,
-  "pause_history": [
-    { "paused_at": "2026-04-27T19:50:00Z" }
-  ]
-}
-JSON
-bash "${SCRIPTS}/cycle-validate.sh" "${F9_DIR}/state.json" >/dev/null 2>&1
-assert "F9: pause_history missing reason rejects" "$?" "1"
-
-# paused: true with empty pause_history → reject
-cat > "${F9_DIR}/state.json" << 'JSON'
-{ "phase": "cycle-plan", "paused": true, "pause_history": [] }
-JSON
-bash "${SCRIPTS}/cycle-validate.sh" "${F9_DIR}/state.json" >/dev/null 2>&1
-assert "F9: paused=true with empty history rejects" "$?" "1"
-
-# forge-status.sh renders the *** PAUSED *** banner when paused
-mkdir -p "${F9_DIR}/cycles"
-cat > "${F9_DIR}/state.json" << 'JSON'
-{
-  "phase": "cycle-plan",
-  "current_cycle": 0,
-  "total_cycles": 0,
-  "paused": true,
-  "pause_history": [
-    {
-      "paused_at": "2026-04-27T19:50:00Z",
-      "reason": "G-Boot failed",
-      "gate": "G-Boot"
-    }
-  ]
-}
-JSON
-OUT=$(bash "${SCRIPTS}/forge-status.sh" "${F9_DIR}" 2>/dev/null || true)
-echo "$OUT" | grep -q "\*\*\* PAUSED \*\*\*"
-assert "F9: forge-status.sh renders PAUSED banner" "$?" "0"
-
-rm -rf "$F9_DIR"
-echo ""
-
-# --- F10: Bash hook coverage during green ---
-echo "Section 11.9: F10 — Bash file-writes blocked during green"
+# --- Bash file-writes during green (F10) ---
+echo "Section 12: Bash file-writes blocked during green"
 F10_DIR=$(setup_green_phase_fixture "tests/foo.test.ts" "src/foo.ts")
 
-# `> path` redirect to a test_file → BLOCK
 echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo trivial > tests/foo.test.ts\"}}" \
   | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F10: Bash > to test_file blocks"   "$?" "2"
+assert "Bash > to test_file blocks"            "$?" "2"
 
-# `>> path` append to a test_file → BLOCK
 echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo extra >> tests/foo.test.ts\"}}" \
   | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F10: Bash >> to test_file blocks"  "$?" "2"
+assert "Bash >> to test_file blocks"           "$?" "2"
 
-# `cp src dst` where dst is a test_file → BLOCK
 echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cp src/something tests/foo.test.ts\"}}" \
   | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F10: Bash cp to test_file blocks"  "$?" "2"
+assert "Bash cp to test_file blocks"           "$?" "2"
 
-# `sed -i path` on a test_file → BLOCK
 echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sed -i 's/expect/skip/' tests/foo.test.ts\"}}" \
   | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F10: Bash sed -i on test_file blocks" "$?" "2"
+assert "Bash sed -i on test_file blocks"       "$?" "2"
 
-# `> path` redirect to a SOURCE file → ALLOW (not a test path)
 echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo content > src/foo.ts\"}}" \
   | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F10: Bash > to source path allows" "$?" "0"
+assert "Bash > to source path allows"          "$?" "0"
 
-# `pnpm test` (no file-write pattern) → ALLOW
 echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pnpm test\"}}" \
   | (cd "${F10_DIR}" && node "${HOOK}" pre-tool-use) >/dev/null 2>&1
-assert "F10: Bash with no write target allows" "$?" "0"
+assert "Bash with no write target allows"      "$?" "0"
 
 rm -rf "$F10_DIR"
 echo ""
 
-# --- e2e-extract.sh + cycle-e2e-pass.sh + scenarios.json schema (P6 / v0.2.0) ---
-echo "Section 11: Phase F (e2e)"
+# --- Section 13: anchor-file protection (state.json + tests.json themselves) ---
+echo "Section 13: anchor-file protection during green"
+A_DIR=$(setup_green_phase_fixture "tests/foo.test.ts")
 
-# e2e-extract.sh roundtrip — parse spec.md ## E2E Tests, validate output
-E2E_OUT=$(mktemp -d)
-bash "${SCRIPTS}/e2e-extract.sh" "${FIXTURES}/e2e-spec-source/spec.md" "${E2E_OUT}/scenarios.json" >/dev/null 2>&1
-assert "e2e-extract.sh runs"                 "$?" "0"
-[[ -f "${E2E_OUT}/scenarios.json" ]]
-assert "e2e-extract emitted scenarios.json"  "$?" "0"
-extracted_count=$(jq 'length' "${E2E_OUT}/scenarios.json" 2>/dev/null || echo "?")
-[[ "$extracted_count" == "2" ]]
-assert "e2e-extract found 2 scenarios"       "$?" "0"
-bash "${SCRIPTS}/cycle-validate.sh" "${E2E_OUT}/scenarios.json" >/dev/null 2>&1
-assert "extracted scenarios.json validates"  "$?" "0"
-rm -rf "$E2E_OUT"
+# state.json itself must NOT be writable during green (would disable rule 5)
+run_hook "blocks Edit on state.json" \
+  "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${A_DIR}/.forge/state.json\"}}" \
+  "2" "$A_DIR"
 
-# scenarios.json schema — fixture-based
-bash "${SCRIPTS}/cycle-validate.sh" "${FIXTURES}/e2e-good/scenarios.json" >/dev/null 2>&1
-assert "e2e-good scenarios.json validates"   "$?" "0"
+# tests.json itself must NOT be writable during green
+run_hook "blocks Edit on tests.json" \
+  "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${A_DIR}/.forge/cycles/1/tests.json\"}}" \
+  "2" "$A_DIR"
 
-# F3: e2e-extract round-trips a planner-shaped spec (more realistic than the
-# minimal e2e-spec-source fixture — has full prose sections plus the canonical
-# fenced-YAML block the planner is told to copy verbatim).
-PSHAPE_OUT=$(mktemp -d)
-bash "${SCRIPTS}/e2e-extract.sh" "${FIXTURES}/e2e-spec-source-planner-shape/spec.md" "${PSHAPE_OUT}/scenarios.json" >/dev/null 2>&1
-assert "F3: planner-shape extracts cleanly"  "$?" "0"
-bash "${SCRIPTS}/cycle-validate.sh" "${PSHAPE_OUT}/scenarios.json" >/dev/null 2>&1
-assert "F3: planner-shape scenarios validate" "$?" "0"
-pshape_count=$(jq 'length' "${PSHAPE_OUT}/scenarios.json" 2>/dev/null || echo "?")
-[[ "$pshape_count" == "3" ]]
-assert "F3: planner-shape extracted 3 scenarios" "$?" "0"
-rm -rf "${PSHAPE_OUT}"
+# Bash writes to anchors also blocked
+run_hook "blocks Bash > to state.json" \
+  "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo x > .forge/state.json\"}}" \
+  "2" "$A_DIR"
 
-# F3 negative direction: bullets-shape ## E2E Tests must NOT silently produce
-# zero scenarios — that would let a planner-output regression skip Phase F
-# entirely. e2e-extract.sh exits non-zero when the section is present but
-# parses to zero scenarios.
-BULLETS_OUT=$(mktemp -d)
-bash "${SCRIPTS}/e2e-extract.sh" "${FIXTURES}/e2e-spec-source-bullets/spec.md" "${BULLETS_OUT}/scenarios.json" >/dev/null 2>&1
-assert "F3: bullets-shape rejects (extractor exit non-zero)" "$?" "1"
-rm -rf "${BULLETS_OUT}"
+# A worker can't write state.json via candidate-staging either
+mkdir -p "${A_DIR}/.forge/cycles/1/green/candidates/worker-1/files/.forge"
+run_hook "blocks state.json edit via candidate staging" \
+  "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"${A_DIR}/.forge/cycles/1/green/candidates/worker-1/files/.forge/state.json\"}}" \
+  "2" "$A_DIR"
 
-# Malformed scenarios.json (missing required fields) → reject
-BAD_SCEN=$(mktemp -d)
-echo '[{"id":"E-001","name":"x"}]' > "${BAD_SCEN}/scenarios.json"
-bash "${SCRIPTS}/cycle-validate.sh" "${BAD_SCEN}/scenarios.json" >/dev/null 2>&1
-assert "malformed scenarios.json rejects"    "$?" "1"
-rm -rf "$BAD_SCEN"
-
-# cycle-e2e-pass.sh — passing fixture
-bash "${SCRIPTS}/cycle-e2e-pass.sh" "${FIXTURES}/e2e-good" >/dev/null 2>&1
-assert "e2e-good fixture passes ship gate"   "$?" "0"
-
-# cycle-e2e-pass.sh — failing fixture (critical cluster + uncovered scenario)
-bash "${SCRIPTS}/cycle-e2e-pass.sh" "${FIXTURES}/e2e-bad" >/dev/null 2>&1
-assert "e2e-bad fixture fails ship gate"     "$?" "1"
+rm -rf "$A_DIR"
 echo ""
 
-# --- Cleanup transient outputs ---
-rm -f "${FIXTURES}/cycle-good/_consolidated.json"
-rm -f "${FIXTURES}/cycle-bad-disputed/_consolidated.json"
-rmdir "${FIXTURES}/cycle-bad-disputed" 2>/dev/null || true
+# --- Section 14: hook is conditional on phase=green (non-green allows) ---
+echo "Section 14: non-green phase allows test-file edit"
+NG_DIR=$(mktemp -d)
+mkdir -p "${NG_DIR}/.forge/cycles/1"
+cat > "${NG_DIR}/.forge/state.json" << 'JSON'
+{ "phase": "test-list", "current_cycle": 1 }
+JSON
+printf '[{"id":"T-001","name":"x","behavior":"x","kind":"unit","target_file":"src/foo.ts","test_file":"tests/foo.test.ts"}]\n' \
+  > "${NG_DIR}/.forge/cycles/1/tests.json"
+
+run_hook "allows test_file edit in test-list phase" \
+  "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${NG_DIR}/tests/foo.test.ts\"}}" \
+  "0" "$NG_DIR"
+
+# No state.json at all → no green phase → allow.
+NG2_DIR=$(mktemp -d)
+mkdir -p "${NG2_DIR}/tests"
+run_hook "allows edit when no state.json (out of .forge)" \
+  "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${NG2_DIR}/tests/foo.test.ts\"}}" \
+  "0" "$NG2_DIR"
+
+rm -rf "$NG_DIR" "$NG2_DIR"
+echo ""
+
+# --- Section 15: hook fail-closed on malformed state.json / tests.json ---
+echo "Section 15: hook fail-closed on malformed anchor files"
+M_DIR=$(setup_green_phase_fixture "tests/foo.test.ts")
+echo "not json" > "${M_DIR}/.forge/state.json"
+run_hook "malformed state.json → block (fail-closed)" \
+  "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${M_DIR}/src/foo.ts\"}}" \
+  "2" "$M_DIR"
+
+# Restore a valid green state but corrupt tests.json
+cat > "${M_DIR}/.forge/state.json" << 'JSON'
+{ "phase": "green", "current_cycle": 1 }
+JSON
+echo "{bad" > "${M_DIR}/.forge/cycles/1/tests.json"
+run_hook "malformed tests.json → block (fail-closed)" \
+  "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${M_DIR}/src/foo.ts\"}}" \
+  "2" "$M_DIR"
+
+rm -rf "$M_DIR"
+echo ""
+
+# --- Section 16: Bash side-door extensions (BSD sed, &>, >|, cp -t, perl, ln, truncate) ---
+echo "Section 16: extended Bash side-door coverage"
+E_DIR=$(setup_green_phase_fixture "tests/foo.test.ts" "src/foo.ts")
+
+run_hook "BSD sed -i '' blocks"   "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sed -i '' 's/x/y/' tests/foo.test.ts\"}}" "2" "$E_DIR"
+run_hook "&> redirect blocks"      "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo trivial &> tests/foo.test.ts\"}}" "2" "$E_DIR"
+run_hook ">| clobber blocks"       "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo trivial >| tests/foo.test.ts\"}}" "2" "$E_DIR"
+run_hook "2> redirect blocks"      "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"some_cmd 2> tests/foo.test.ts\"}}" "2" "$E_DIR"
+run_hook "cp -t form blocks"       "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cp -t tests/ src/a tests/foo.test.ts\"}}" "2" "$E_DIR"
+run_hook "perl -i blocks"          "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"perl -i -pe 's/x/y/' tests/foo.test.ts\"}}" "2" "$E_DIR"
+run_hook "awk -i inplace blocks"   "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"awk -i inplace '{print}' tests/foo.test.ts\"}}" "2" "$E_DIR"
+run_hook "truncate blocks"         "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"truncate -s 0 tests/foo.test.ts\"}}" "2" "$E_DIR"
+run_hook "ln -sf blocks"           "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ln -sf /dev/null tests/foo.test.ts\"}}" "2" "$E_DIR"
+run_hook "rm blocks"               "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm tests/foo.test.ts\"}}" "2" "$E_DIR"
+run_hook "bash -c with test path blocks" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"bash -c 'echo y > tests/foo.test.ts'\"}}" "2" "$E_DIR"
+run_hook "sh -c with test path blocks"   "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sh -c 'cp src/a tests/foo.test.ts'\"}}" "2" "$E_DIR"
+run_hook "eval with test path blocks"    "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"eval \\\"echo y > tests/foo.test.ts\\\"\"}}" "2" "$E_DIR"
+
+# Negative: write to a SOURCE path with bash -c is allowed.
+run_hook "bash -c to source allows"   "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"bash -c 'echo y > src/foo.ts'\"}}" "0" "$E_DIR"
+
+rm -rf "$E_DIR"
+echo ""
+
+# --- Section 17: C1-style cycle id (string id) blocks correctly ---
+echo "Section 17: string cycle id (C1) works with candidate-staging peel"
+C_DIR=$(mktemp -d)
+mkdir -p "${C_DIR}/.forge/cycles/C1"
+cat > "${C_DIR}/.forge/state.json" << 'JSON'
+{ "phase": "green", "current_cycle": "C1" }
+JSON
+printf '[{"id":"T-001","name":"x","behavior":"x","kind":"unit","target_file":"src/foo.ts","test_file":"tests/foo.test.ts"}]\n' \
+  > "${C_DIR}/.forge/cycles/C1/tests.json"
+mkdir -p "${C_DIR}/.forge/cycles/C1/green/candidates/worker-3/files"
+
+run_hook "blocks edit on test_file (C1)"  \
+  "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${C_DIR}/tests/foo.test.ts\"}}" \
+  "2" "$C_DIR"
+run_hook "blocks worker test-file edit (C1)" \
+  "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${C_DIR}/.forge/cycles/C1/green/candidates/worker-3/files/tests/foo.test.ts\"}}" \
+  "2" "$C_DIR"
+run_hook "allows worker source edit (C1)" \
+  "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${C_DIR}/.forge/cycles/C1/green/candidates/worker-3/files/src/foo.ts\"}}" \
+  "0" "$C_DIR"
+
+rm -rf "$C_DIR"
+echo ""
+
+# --- Section 18: result.json validator (positive + negative) ---
+echo "Section 18: result.json schema validation"
+R_DIR=$(mktemp -d)
+
+# Positive
+cat > "${R_DIR}/result.json" << 'JSON'
+{
+  "cycle_id": "C1",
+  "status": "pass",
+  "summary": "all tests pass; 0 critical findings",
+  "winner_worker": "W3",
+  "review_clusters": { "critical": 0, "high": 2, "medium": 5, "low": 3, "info": 0 },
+  "started_at": "2026-05-19T10:00:00Z",
+  "ended_at":   "2026-05-19T10:24:00Z"
+}
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${R_DIR}/result.json" >/dev/null 2>&1
+assert "good result.json validates"            "$?" "0"
+
+# Negative: missing status
+cat > "${R_DIR}/result.json" << 'JSON'
+{ "cycle_id": "C1", "summary": "x", "review_clusters": { "critical": 0, "high": 0 } }
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${R_DIR}/result.json" >/dev/null 2>&1
+assert "result.json without status rejects"    "$?" "1"
+
+# Negative: invalid status value
+cat > "${R_DIR}/result.json" << 'JSON'
+{ "cycle_id": "C1", "status": "ok", "summary": "x", "review_clusters": { "critical": 0, "high": 0 } }
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${R_DIR}/result.json" >/dev/null 2>&1
+assert "result.json with bad status rejects"   "$?" "1"
+
+# Negative: review_clusters is the wrong shape (array, not object)
+cat > "${R_DIR}/result.json" << 'JSON'
+{ "cycle_id": "C1", "status": "pass", "summary": "x", "review_clusters": [] }
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${R_DIR}/result.json" >/dev/null 2>&1
+assert "result.json with array review_clusters rejects" "$?" "1"
+
+# Negative: status pass but critical > 0
+cat > "${R_DIR}/result.json" << 'JSON'
+{ "cycle_id": "C1", "status": "pass", "summary": "x", "review_clusters": { "critical": 3, "high": 0 } }
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${R_DIR}/result.json" >/dev/null 2>&1
+assert "result.json pass-with-critical>0 rejects" "$?" "1"
+
+rm -rf "$R_DIR"
+echo ""
+
+# --- Section 19: state.json + tests.json validators (positive + negative) ---
+echo "Section 19: state.json and tests.json validators"
+S_DIR=$(mktemp -d)
+
+# state.json: positive
+cat > "${S_DIR}/state.json" << 'JSON'
+{
+  "spec_path": ".forge/spec.md",
+  "current_cycle": "C1",
+  "phase": "green",
+  "cycles": {
+    "C1": { "status": "in_progress", "goal_condition": "x" },
+    "C2": { "status": "pending",     "goal_condition": "y" }
+  }
+}
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${S_DIR}/state.json" >/dev/null 2>&1
+assert "good state.json validates"             "$?" "0"
+
+# state.json: bad phase enum
+cat > "${S_DIR}/state.json" << 'JSON'
+{ "phase": "GREEN", "cycles": {} }
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${S_DIR}/state.json" >/dev/null 2>&1
+assert "state.json with bad phase enum rejects" "$?" "1"
+
+# state.json: bad cycle status enum
+cat > "${S_DIR}/state.json" << 'JSON'
+{ "phase": "green", "cycles": { "C1": { "status": "DONE" } } }
+JSON
+bash "${SCRIPTS}/cycle-validate.sh" "${S_DIR}/state.json" >/dev/null 2>&1
+assert "state.json with bad cycle status rejects" "$?" "1"
+
+# tests.json: empty array now rejects (cycle-init's `[]` stub isn't a complete tests.json)
+echo "[]" > "${S_DIR}/tests.json"
+bash "${SCRIPTS}/cycle-validate.sh" "${S_DIR}/tests.json" >/dev/null 2>&1
+assert "empty tests.json rejects"              "$?" "1"
+
+rm -rf "$S_DIR"
+echo ""
+
+# --- Section 20: agent-config.md schema strictness ---
+echo "Section 20: agent-config.md key-presence schema"
+AC_DIR=$(mktemp -d)
+
+# frontmatter present, but missing required top-level keys → reject
+cat > "${AC_DIR}/agent-config.md" << 'EOF'
+---
+random_key: foo
+---
+
+# something
+EOF
+bash "${SCRIPTS}/cycle-validate.sh" "${AC_DIR}/agent-config.md" >/dev/null 2>&1
+assert "agent-config without required keys rejects" "$?" "1"
+
+rm -rf "$AC_DIR"
+echo ""
+
+# --- Section 21: spec.md required sections ---
+echo "Section 21: spec.md required sections (exact match, fence-aware)"
+SP_DIR=$(mktemp -d)
+
+# Missing only ## Cycle Plan → reject
+cat > "${SP_DIR}/spec.md" << 'EOF'
+# Spec
+
+## Vision
+x
+
+## Acceptance Criteria
+- AC-001
+
+## Architecture
+y
+
+## E2E Tests
+- E-001
+
+## Reviewer Config
+model: opus
+dimensions: [correctness]
+EOF
+bash "${SCRIPTS}/cycle-validate.sh" "${SP_DIR}/spec.md" >/dev/null 2>&1
+assert "spec missing ONLY Cycle Plan rejects"  "$?" "1"
+
+# Missing only ## Reviewer Config → reject
+cat > "${SP_DIR}/spec.md" << 'EOF'
+# Spec
+
+## Vision
+x
+
+## Acceptance Criteria
+- AC-001
+
+## Architecture
+y
+
+## E2E Tests
+- E-001
+
+## Cycle Plan
+- id: C1
+EOF
+bash "${SCRIPTS}/cycle-validate.sh" "${SP_DIR}/spec.md" >/dev/null 2>&1
+assert "spec missing ONLY Reviewer Config rejects" "$?" "1"
+
+# Missing only ## Acceptance Criteria → reject (newly required)
+cat > "${SP_DIR}/spec.md" << 'EOF'
+# Spec
+
+## Vision
+x
+
+## Architecture
+y
+
+## E2E Tests
+- E-001
+
+## Cycle Plan
+- id: C1
+
+## Reviewer Config
+model: opus
+dimensions: [correctness]
+EOF
+bash "${SCRIPTS}/cycle-validate.sh" "${SP_DIR}/spec.md" >/dev/null 2>&1
+assert "spec missing ONLY Acceptance Criteria rejects" "$?" "1"
+
+# Heading inside fenced code block should NOT satisfy the requirement
+cat > "${SP_DIR}/spec.md" << 'EOF'
+# Spec
+
+## Vision
+x
+
+## Acceptance Criteria
+- AC-001
+
+## Architecture
+y
+
+## E2E Tests
+- E-001
+
+```yaml
+## Cycle Plan
+- id: C1
+```
+
+## Reviewer Config
+model: opus
+dimensions: [correctness]
+EOF
+bash "${SCRIPTS}/cycle-validate.sh" "${SP_DIR}/spec.md" >/dev/null 2>&1
+assert "fenced ## Cycle Plan doesn't satisfy section requirement" "$?" "1"
+
+# Prefix-match should NOT satisfy: '## Reviewer Configuration' != '## Reviewer Config'
+cat > "${SP_DIR}/spec.md" << 'EOF'
+# Spec
+
+## Vision
+x
+
+## Acceptance Criteria
+- AC-001
+
+## Architecture
+y
+
+## E2E Tests
+- E-001
+
+## Cycle Plan
+- id: C1
+
+## Reviewer Configuration
+model: opus
+dimensions: [correctness]
+EOF
+bash "${SCRIPTS}/cycle-validate.sh" "${SP_DIR}/spec.md" >/dev/null 2>&1
+assert "## Reviewer Configuration doesn't satisfy ## Reviewer Config" "$?" "1"
+
+rm -rf "$SP_DIR"
+echo ""
+
+# --- Section 22: forge-status reads Option D cycles[].status schema ---
+echo "Section 22: forge-status.sh renders Option D status counts"
+FS_DIR=$(mktemp -d)
+cat > "${FS_DIR}/state.json" << 'JSON'
+{
+  "spec_path": ".forge/spec.md",
+  "current_cycle": "C2",
+  "phase": "green",
+  "cycles": {
+    "C1": { "status": "pass" },
+    "C2": { "status": "in_progress" },
+    "C3": { "status": "pending" }
+  }
+}
+JSON
+OUT=$(bash "${SCRIPTS}/forge-status.sh" "${FS_DIR}" 2>/dev/null || true)
+echo "$OUT" | grep -q "pass=1"
+assert "forge-status renders pass=1"           "$?" "0"
+echo "$OUT" | grep -q "in_progress=1"
+assert "forge-status renders in_progress=1"    "$?" "0"
+echo "$OUT" | grep -q "pending=1"
+assert "forge-status renders pending=1"        "$?" "0"
+rm -rf "$FS_DIR"
+echo ""
+
+# --- Section 23: forge.sh refuses stale state.json without --resume ---
+echo "Section 23: forge.sh --resume guard for stale .forge/state.json"
+ST_DIR=$(mktemp -d)
+mkdir -p "${ST_DIR}/.forge"
+cat > "${ST_DIR}/.forge/state.json" << 'JSON'
+{ "spec_path": ".forge/spec.md", "cycles": {} }
+JSON
+
+# Without --resume, stale state.json triggers an error (exit 2)
+(cd "$ST_DIR" && bash "${SCRIPTS}/forge.sh" "task" --quick) >/dev/null 2>&1
+assert "forge.sh refuses stale state.json"     "$?" "2"
+
+rm -rf "$ST_DIR"
+echo ""
+
+# --- Section 24: forge.sh --help and missing-argument behavior ---
+echo "Section 24: forge.sh argument handling"
+HELP_OUT=$(bash "${SCRIPTS}/forge.sh" --help 2>&1)
+echo "$HELP_OUT" | grep -q "Usage:"
+assert "forge.sh --help emits Usage"            "$?" "0"
+
+# Empty description → error exit 2
+bash "${SCRIPTS}/forge.sh" --quick >/dev/null 2>&1
+assert "forge.sh with no description exits 2"   "$?" "2"
+echo ""
+
+# --- Section 25: forge-status.sh surfaces malformed result.json ---
+echo "Section 25: forge-status.sh result.json malformed detection"
+MD_DIR=$(mktemp -d)
+mkdir -p "${MD_DIR}/cycles/C1"
+cat > "${MD_DIR}/state.json" << 'JSON'
+{ "cycles": { "C1": { "status": "pass" } } }
+JSON
+# A malformed result.json (review_clusters shape wrong) — forge-status reads it
+# via the // 0 fallback and would silently render critical=0. We don't expect
+# forge-status to "validate" inline, but it should at least surface SOMETHING
+# the operator can investigate. Cheapest check: the script doesn't crash.
+cat > "${MD_DIR}/cycles/C1/result.json" << 'JSON'
+{ "cycle_id": "C1", "status": "?", "review_clusters": "not-an-object" }
+JSON
+OUT=$(bash "${SCRIPTS}/forge-status.sh" "${MD_DIR}" 2>/dev/null || true)
+# The script should still emit its header even with malformed cycle data.
+echo "$OUT" | grep -q "Forge Status"
+assert "forge-status survives malformed result.json" "$?" "0"
+rm -rf "$MD_DIR"
+echo ""
 
 # --- Summary ---
 echo "=== Smoke summary ==="
-echo "  Passed: $PASSED"
-echo "  Failed: $FAILED"
+echo "  Passed:  $PASSED"
+echo "  Failed:  $FAILED"
+echo "  Skipped: $SKIPPED"
 if [[ "$FAILED" != "0" ]]; then
   echo ""
   echo "Failed assertions:"
