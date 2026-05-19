@@ -305,16 +305,18 @@
 <header class="hero">
   <div class="meta">
     <span class="pill version">multi-agent build system</span>
-    <span class="pill">/goal-recursive</span>
+    <span class="pill">Claude Code plugin</span>
     <span class="pill">TDD as a phase</span>
   </div>
   <h1>Code Forge</h1>
   <p class="tagline">
-    Turn a lazy prompt into a shippable PoC through recursive <code>/goal</code> orchestration:
-    a top-level Claude session reads the spec and spawns one <code>claude -p /goal</code>
-    per cycle. Each cycle runs best-of-N implementer workers, configurable dimensional reviewers,
-    and a consolidator. One hook keeps test files read-only during green phase so the
-    <code>/goal</code> evaluator can't talk a worker into weakening the suite.
+    Turn a lazy prompt into a shippable PoC. The <code>/forge</code> skill
+    drives the run in your Claude Code session — Phase 0 (claudex) → Phase 1
+    (planner authors <code>spec.md</code>) → cycle loop. Each cycle spawns
+    one <code>claude -p /goal</code> child that runs best-of-N implementer
+    workers, configurable dimensional reviewers, and a consolidator. One
+    hook keeps test files read-only during green so the cycle's
+    <code>/goal</code> can't talk a worker into weakening the suite.
   </p>
   <div class="actions">
     <a class="btn primary" href="https://github.com/alilloig/code-forge">View on GitHub</a>
@@ -360,8 +362,8 @@
       <p>N reviewers (count, model, dimensions all picked in <code>spec.md</code>) cover a curated lens menu — correctness, design, simplicity, security, more. A consolidator clusters, verifies, ships <code>review.md</code>.</p>
     </div>
     <div class="card">
-      <h4><code>/goal</code>-recursive orchestration</h4>
-      <p>An outer Claude session reads <code>spec.md ## Cycle Plan</code> and spawns one <code>claude -p /goal</code> child per cycle. Session boundaries sidestep the one-goal-per-session limit.</p>
+      <h4>Goal-driven cycles</h4>
+      <p>The <code>/forge</code> skill drives the run in your interactive session and spawns one <code>claude -p /goal</code> per cycle for the autonomous bits — each child loops until its <code>result.json</code> shows <code>status: pass</code>.</p>
     </div>
     <div class="card">
       <h4>Anti-weakening hook</h4>
@@ -375,12 +377,14 @@
 </section>
 
 <section id="architecture">
-  <h2><span class="num">02</span>The <code>/goal</code>-recursive architecture</h2>
+  <h2><span class="num">02</span>How a run flows</h2>
   <p>
-    Code Forge runs as two nested goal sessions joined at process boundaries.
-    The outer session manages cycle progression; each cycle child manages the
-    inside of one cycle. Both sessions get their own Haiku evaluator that
-    judges the <code>/goal</code> condition after every turn.
+    The <code>/forge</code> skill is the orchestrator. It runs in your
+    interactive Claude Code session and drives Phase 0/1 + the cycle loop
+    directly — no separate outer process. For each cycle in
+    <code>spec.md ## Cycle Plan</code>, it spawns one <code>claude -p /goal</code>
+    child; each child has its own Haiku evaluator that judges the cycle's
+    goal condition after every turn.
   </p>
 
   <figure>
@@ -402,14 +406,14 @@
 
       <line x1="223" y1="50" x2="248" y2="50" stroke="#15803d" stroke-width="1.8" marker-end="url(#arr-flow)"/>
 
-      <!-- Outer goal session -->
+      <!-- /forge skill (orchestrator in user's session) -->
       <rect x="251" y="10" width="649" height="180" rx="8" fill="#ecfdf5" stroke="#15803d" stroke-width="2"/>
-      <text x="575.5" y="34" text-anchor="middle" font-size="14" font-weight="700" fill="#15803d">OUTER /goal SESSION</text>
-      <text x="575.5" y="52" text-anchor="middle" font-size="11" fill="#15803d">claude -p "/goal every cycle has cycles/&lt;id&gt;/result.json status:pass, or stop after K turns"</text>
+      <text x="575.5" y="34" text-anchor="middle" font-size="14" font-weight="700" fill="#15803d">/forge SKILL — your Claude Code session</text>
+      <text x="575.5" y="52" text-anchor="middle" font-size="11" fill="#15803d">drives Phase 0/1 directly, then loops over cycles (no separate outer process)</text>
 
-      <!-- Outer steps -->
+      <!-- Skill steps -->
       <rect x="270" y="65" width="180" height="60" rx="5" fill="#fff" stroke="#15803d"/>
-      <text x="360" y="82" text-anchor="middle" font-size="11" font-weight="600" fill="#15803d">Phase 0/1 (outer)</text>
+      <text x="360" y="82" text-anchor="middle" font-size="11" font-weight="600" fill="#15803d">Phase 0/1</text>
       <text x="360" y="98" text-anchor="middle" font-size="9.5" fill="#15803d">claudex + dispatch planner</text>
       <text x="360" y="111" text-anchor="middle" font-size="9.5" fill="#15803d">→ spec.md + state.json</text>
 
@@ -432,7 +436,7 @@
       <text x="660" y="155" text-anchor="middle" font-size="9.5" fill="#15803d">loop until every cycle is pass</text>
       <polygon points="572,128 580,123 580,133" fill="#15803d"/>
 
-      <text x="575.5" y="180" text-anchor="middle" font-size="10" fill="#15803d">Haiku evaluator reads transcript after every outer turn — verdicts "yes" once all cycles pass</text>
+      <text x="575.5" y="180" text-anchor="middle" font-size="10" fill="#15803d">skill halts on a failure so you can investigate and re-invoke /forge --resume</text>
 
       <!-- Cycle child sessions -->
       <rect x="80" y="220" width="180" height="80" rx="6" fill="#eef2ff" stroke="#1e3a8a" stroke-width="2"/>
@@ -465,15 +469,13 @@
       <line x1="570" y1="220" x2="570" y2="200" stroke="#15803d" stroke-width="1.5" stroke-dasharray="3 2" marker-end="url(#arr-flow)"/>
       <line x1="770" y1="220" x2="770" y2="200" stroke="#15803d" stroke-width="1.5" stroke-dasharray="3 2" marker-end="url(#arr-flow)"/>
     </svg>
-    <figcaption>The outer Claude session reads <code>spec.md</code>, picks the next pending cycle, spawns a child, narrates the result. Repeat until every cycle status is pass.</figcaption>
+    <figcaption>The <code>/forge</code> skill (your Claude Code session) reads <code>spec.md</code>, picks the next pending cycle, spawns a <code>claude -p /goal</code> child, narrates the result. Repeat until every cycle status is pass.</figcaption>
   </figure>
 
   <aside class="callout">
     <h4>Why this works</h4>
     <p>
-      <code>/goal</code> is one-goal-per-session by design. <strong>Session boundaries sidestep the limit.</strong>
-      Each <code>claude -p</code> spawns a fresh session with its own evaluator,
-      enabling recursive goal-driven execution without violating the documented constraint.
+      <code>/goal</code> is one-goal-per-session by design. Each cycle gets its own session — and its own evaluator — by being spawned as a separate <code>claude -p</code> process. The skill itself runs in your interactive session without setting <code>/goal</code>, so you can intervene at any point (the goal-driven autonomy lives at the cycle level, not the run level).
     </p>
   </aside>
 </section>
@@ -484,8 +486,9 @@
     Each cycle is one <code>claude -p /goal</code> session whose condition
     is <em>"<code>result.json</code> exists with <code>status: pass</code>
     AND <code>review.md</code> has 0 critical clusters"</em>. The child
-    runs a linear sequence of dispatches + gates inline; <code>/goal</code>
-    handles re-prompting on failure.
+    runs a linear sequence of dispatches + gates inline; the cycle's
+    <code>/goal</code> handles re-prompting on failure until done or
+    capped at K turns.
   </p>
 
   <h3>Legend</h3>
@@ -578,15 +581,15 @@
       <rect x="270" y="743" width="340" height="60" rx="6" fill="#ecfdf5" stroke="#15803d" stroke-width="2"/>
       <text x="440" y="765" text-anchor="middle" font-size="13" font-weight="600" fill="#15803d">7. write result.json</text>
       <text x="440" y="783" text-anchor="middle" font-size="11" fill="#15803d">{ status: pass | fail, summary, review_clusters }</text>
-      <text x="440" y="797" text-anchor="middle" font-size="10" fill="#15803d">THE gate — outer /goal evaluator reads status</text>
+      <text x="440" y="797" text-anchor="middle" font-size="10" fill="#15803d">THE gate — the skill reads status to decide pass/halt</text>
 
       <line x1="440" y1="805" x2="440" y2="825" stroke="#1e3a8a" stroke-width="1.5" marker-end="url(#arr-cycle)"/>
 
       <!-- Exit -->
       <text x="440" y="847" text-anchor="middle" font-size="11" fill="#15803d">Cycle child exits. /goal evaluator clears if status:pass + 0 critical;</text>
       <text x="440" y="863" text-anchor="middle" font-size="11" fill="#15803d">re-prompts cycle child if not (built-in retry behavior).</text>
-      <text x="440" y="888" text-anchor="middle" font-size="11" fill="#6b7280">Outer Claude reads result.json, narrates "cycle &lt;id&gt; status=pass",</text>
-      <text x="440" y="904" text-anchor="middle" font-size="11" fill="#6b7280">outer Haiku evaluator sees it in transcript, moves to next cycle.</text>
+      <text x="440" y="888" text-anchor="middle" font-size="11" fill="#6b7280">The skill reads result.json, narrates "cycle &lt;id&gt; status=pass",</text>
+      <text x="440" y="904" text-anchor="middle" font-size="11" fill="#6b7280">and moves to the next pending cycle (or halts on fail).</text>
     </svg>
     <figcaption>One cycle child. <strong>Test-author + consolidator are subagents</strong> (focused prompts own schema discipline + cluster verification). <strong>Workers + reviewers are inline Agent dispatches</strong> — count, model, and per-reviewer dimension all read from <code>spec.md</code>.</figcaption>
   </figure>
@@ -667,7 +670,7 @@ dimensions:
 <section id="spec-md">
   <h2><span class="num">06</span><code>spec.md</code> — the single artifact</h2>
   <p>
-    Everything per-project lives in one file. The planner emits it during Phase 1; the outer session and every cycle child read it.
+    Everything per-project lives in one file. The planner emits it during Phase 1; the skill and every cycle child read it.
   </p>
 
   <ul>
@@ -746,7 +749,7 @@ dimensions:
   <h2><span class="num">08</span>Further reading</h2>
   <ul>
     <li><a href="https://github.com/alilloig/code-forge"><strong>GitHub repo</strong></a> — source of truth</li>
-    <li><a href="https://github.com/alilloig/code-forge/blob/main/docs/goal-integration.md">docs/goal-integration.md</a> — full protocol (outer + cycle child procedures)</li>
+    <li><a href="https://github.com/alilloig/code-forge/blob/main/docs/goal-integration.md">docs/goal-integration.md</a> — full protocol (skill + cycle child procedures)</li>
     <li><a href="https://github.com/alilloig/code-forge/blob/main/templates/spec.md.template">templates/spec.md.template</a> — copy-pasteable spec skeleton</li>
     <li><a href="https://github.com/alilloig/code-forge/blob/main/agents/">agents/</a> — per-agent prompts (planner, test-author, implementer-worker, reviewer, consolidator)</li>
     <li><a href="https://github.com/alilloig/code-forge/blob/main/hooks/forge-guard.mjs">hooks/forge-guard.mjs</a> — the surviving rule</li>
@@ -758,8 +761,9 @@ dimensions:
 
 <footer class="page">
   <p>
-    Code Forge — multi-agent build system with <code>/goal</code>-recursive orchestration,
-    best-of-N implementer, and configurable dimensional review. Parallel-review pattern
+    Code Forge — multi-agent build system. The <code>/forge</code> skill orchestrates
+    in your Claude Code session and spawns goal-driven cycle children. Best-of-N
+    implementer + configurable dimensional review. Parallel-review pattern
     adopted from <a href="https://github.com/alilloig/sui-pilot">sui-pilot</a>'s
     <code>move-pr-review</code> skill.
   </p>
