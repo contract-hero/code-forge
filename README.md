@@ -4,7 +4,7 @@ A Claude Code plugin that turns a lazy prompt into a shippable PoC/MVP through
 recursive `/goal` orchestration, TDD-as-phase, best-of-N implementer workers,
 and configurable dimensional review.
 
-> **Visual walkthrough — [alilloig.github.io/code-forge](https://alilloig.github.io/code-forge/)**
+> **Visual walkthrough — [contract-hero.github.io/code-forge](https://contract-hero.github.io/code-forge/)**
 > The GitHub Pages landing is the easiest way to understand what Code Forge
 > does: cycle architecture diagrams, the dimension menu, the surviving hook,
 > and a quick-start. Source: [`docs/index.html`](./docs/index.html).
