@@ -5,7 +5,7 @@ argument-hint: "(no arguments)"
 
 # Forge Smoke
 
-Run `tests/smoke.sh` — the plugin's self-test. Use this before pushing changes; CI runs the same script at the merge boundary.
+Run `tests/smoke.sh` — the plugin's self-test. Use before pushing changes.
 
 ## Instructions
 
@@ -17,15 +17,23 @@ bash "${CLAUDE_PLUGIN_ROOT}/tests/smoke.sh"
 
 Report:
 - Exit 0 → all assertions passed; the plugin is safe to use.
-- Exit non-zero → some assertion failed; the plugin scripts have a bug. Read the script's stderr; fix; re-run.
+- Exit non-zero → some assertion failed; read the script's stderr,
+  fix, re-run.
 
-The smoke test asserts:
+The smoke test asserts (Option D set):
 
-1. `cycle-validate.sh` accepts the `cycle-good` fixture and rejects the bad fixtures.
-2. `cycle-consolidate.mjs` produces the expected cluster count and severity distribution from the good fixture.
-3. `cycle-coverage.sh` flags the expected files in the good fixture's coverage matrix.
-4. `cycle-pass.sh` returns 0 on `cycle-good` and non-zero on `cycle-bad-disputed`.
-5. `cycle-tests-pass.sh red` correctly inverts exit codes (passing tests at red = phase fails).
-6. `jq` and `node` are present.
+1. `cycle-validate.sh` accepts the `cycle-good` fixture and rejects
+   the `cycle-bad-tests-schema` fixture.
+2. `cycle-tests-pass.sh red` correctly inverts exit codes (passing
+   tests at red = phase fails).
+3. `cycle-init.sh` scaffolds the cycle directory (`tests.json`,
+   `reviewers/`, `green/candidates/`).
+4. `forge-guard.mjs` blocks Edit/Write/Bash to test-file paths during
+   green phase (rule 5 — the surviving anti-weakening rule).
+5. `forge-guard.mjs` peels candidate-staging prefixes so workers can't
+   weaken tests via their own candidate directory.
+6. `forge-status.sh` runs and emits its header.
+7. `jq` and `node` are present.
 
-If any assertion fails, the plugin should not be used until fixed. Report the failure to the user with the exact assertion that broke.
+If any assertion fails, the plugin should not be used until fixed.
+Report the failure with the exact assertion that broke.

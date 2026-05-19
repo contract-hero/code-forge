@@ -39,14 +39,20 @@ if [[ -f "$FORGE_DIR/state.json" ]]; then
 
     PHASE=$(jq -r '.phase // "?"' "$FORGE_DIR/state.json" 2>/dev/null || echo "?")
     CYCLE=$(jq -r '.current_cycle // "?"' "$FORGE_DIR/state.json" 2>/dev/null || echo "?")
-    CYC_STATUS=$(jq -r '.cycle_status // "?"' "$FORGE_DIR/state.json" 2>/dev/null || echo "?")
-    ITER=$(jq -r '.iteration // 0' "$FORGE_DIR/state.json" 2>/dev/null || echo "0")
-    TOTAL=$(jq -r '.total_cycles // "?"' "$FORGE_DIR/state.json" 2>/dev/null || echo "?")
+    LIGHT=$(jq -r '.light_mode // false' "$FORGE_DIR/state.json" 2>/dev/null || echo "false")
+    QUICK=$(jq -r '.quick_mode // false' "$FORGE_DIR/state.json" 2>/dev/null || echo "false")
+    # Option D: cycle progress lives in cycles[<id>].status, no top-level
+    # cycle_status / total_cycles / iteration. Count statuses inline.
+    PENDING=$(jq -r '[(.cycles // {}) | to_entries[] | select(.value.status == "pending")] | length' "$FORGE_DIR/state.json" 2>/dev/null || echo "0")
+    INPROG=$(jq -r '[(.cycles // {}) | to_entries[] | select(.value.status == "in_progress")] | length' "$FORGE_DIR/state.json" 2>/dev/null || echo "0")
+    PASSED=$(jq -r '[(.cycles // {}) | to_entries[] | select(.value.status == "pass")] | length' "$FORGE_DIR/state.json" 2>/dev/null || echo "0")
+    FAILED=$(jq -r '[(.cycles // {}) | to_entries[] | select(.value.status == "fail")] | length' "$FORGE_DIR/state.json" 2>/dev/null || echo "0")
+    TOTAL=$((PENDING + INPROG + PASSED + FAILED))
     echo "Top-level state:"
     echo "  phase:          $PHASE"
-    echo "  current_cycle:  $CYCLE / $TOTAL"
-    echo "  cycle_status:   $CYC_STATUS"
-    echo "  iteration:      $ITER"
+    echo "  current_cycle:  $CYCLE"
+    echo "  cycles:         pass=$PASSED / in_progress=$INPROG / pending=$PENDING / fail=$FAILED  (total=$TOTAL)"
+    echo "  flags:          --light=$LIGHT --quick=$QUICK"
   else
     echo "(jq not installed; raw state.json:)"
     cat "$FORGE_DIR/state.json"
@@ -57,7 +63,7 @@ fi
 
 echo ""
 echo "Phase artifacts (top-level):"
-for art in intent.md spec.md cycle-plan.md final-review.md; do
+for art in plan.md spec.md agent-config.md; do
   if [[ -f "$FORGE_DIR/$art" ]]; then
     LINES=$(wc -l < "$FORGE_DIR/$art" | tr -d ' ')
     echo "  ✓ $art ($LINES lines)"
@@ -74,7 +80,7 @@ if [[ -d "$FORGE_DIR/cycles" ]]; then
     n=$(basename "$cd")
     echo ""
     echo "  Cycle $n: $cd"
-    for art in contract.md tests.json _consolidated.json review.md; do
+    for art in tests.json review.md result.json; do
       if [[ -f "$cd$art" ]]; then
         echo "    ✓ $art"
       else
@@ -83,21 +89,25 @@ if [[ -d "$FORGE_DIR/cycles" ]]; then
     done
     if [[ -f "$cd/red.json" ]] && command -v jq >/dev/null 2>&1; then
       RED_EXIT=$(jq -r '.exit_code' "$cd/red.json" 2>/dev/null || echo "?")
-      echo "    red.json:    exit=$RED_EXIT (expected non-zero)"
+      echo "    red.json:    exit=$RED_EXIT (expected non-zero — tests fail at red)"
     fi
     if [[ -f "$cd/green.json" ]] && command -v jq >/dev/null 2>&1; then
       GREEN_EXIT=$(jq -r '.exit_code' "$cd/green.json" 2>/dev/null || echo "?")
-      echo "    green.json:  exit=$GREEN_EXIT (expected 0)"
+      echo "    green.json:  exit=$GREEN_EXIT (expected 0 — tests pass at green)"
     fi
-    if [[ -f "$cd/_consolidated.json" ]] && command -v jq >/dev/null 2>&1; then
-      CLUST=$(jq 'length' "$cd/_consolidated.json" 2>/dev/null || echo "?")
-      CRIT=$(jq '[.[] | select(.max_severity == "critical")] | length' "$cd/_consolidated.json" 2>/dev/null || echo "?")
-      DISP=$(jq '[.[] | select(.disputed_severity == true)] | length' "$cd/_consolidated.json" 2>/dev/null || echo "?")
-      echo "    consolidated: $CLUST clusters (critical=$CRIT, disputed=$DISP)"
+    if [[ -f "$cd/result.json" ]] && command -v jq >/dev/null 2>&1; then
+      R_STATUS=$(jq -r '.status // "?"' "$cd/result.json" 2>/dev/null || echo "?")
+      R_CRIT=$(jq -r '.review_clusters.critical // 0' "$cd/result.json" 2>/dev/null || echo "0")
+      R_HIGH=$(jq -r '.review_clusters.high // 0' "$cd/result.json" 2>/dev/null || echo "0")
+      echo "    result.json: status=$R_STATUS (critical=$R_CRIT, high=$R_HIGH)"
     fi
     if [[ -d "$cd/reviewers" ]]; then
       JSONS=$(find "$cd/reviewers" -name 'subagent-*.json' -type f 2>/dev/null | wc -l | tr -d ' ')
       echo "    reviewers:   $JSONS subagent-*.json files"
+    fi
+    if [[ -d "$cd/green/candidates" ]]; then
+      CANDS=$(find "$cd/green/candidates" -mindepth 1 -maxdepth 1 -type d -name 'worker-*' | wc -l | tr -d ' ')
+      echo "    candidates:  $CANDS best-of-N worker dirs"
     fi
   done
 else

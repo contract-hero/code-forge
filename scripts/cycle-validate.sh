@@ -183,13 +183,51 @@ validate_spec_md() {
     echo "  FAIL: missing H1 title"
     missing=1
   fi
-  # Required sections — Phase 1 output must include E2E Tests
-  for section in "## Vision" "## Core Features" "## Architecture Overview" "## E2E Tests"; do
+  # Option D: spec.md must include Vision + Architecture + E2E Tests +
+  # Cycle Plan + Reviewer Config. The Cycle Plan block is what the outer
+  # /goal session iterates; the Reviewer Config block parameterizes the
+  # cycle child's reviewer fan-out.
+  for section in "## Vision" "## Architecture" "## E2E Tests" "## Cycle Plan" "## Reviewer Config"; do
     if ! grep -q "^${section}" "$f"; then
       echo "  FAIL: missing required section '${section}'"
       missing=1
     fi
   done
+  if [[ "$missing" == "0" ]]; then
+    echo "  OK"
+  else
+    OVERALL=1
+  fi
+}
+
+validate_result_json() {
+  # Option D: each cycle child writes result.json with status + review_clusters
+  # before exiting. The outer /goal evaluator reads status: pass to verdict.
+  local f="$1"
+  echo "=== validating result.json ==="
+  if ! jq -e 'type == "object"' "$f" >/dev/null 2>&1; then
+    echo "  FAIL: not a JSON object" >&2
+    OVERALL=1
+    return 1
+  fi
+  local missing=0
+  # status must be pass | fail
+  local status
+  status=$(jq -r '.status // ""' "$f" 2>/dev/null || echo "")
+  if [[ "$status" != "pass" && "$status" != "fail" ]]; then
+    echo "  FAIL: status must be \"pass\" or \"fail\" (got: \"$status\")"
+    missing=1
+  fi
+  # cycle_id required
+  if ! jq -e 'has("cycle_id") and (.cycle_id | type == "string")' "$f" >/dev/null 2>&1; then
+    echo "  FAIL: missing or non-string cycle_id"
+    missing=1
+  fi
+  # review_clusters required if status is pass | fail
+  if ! jq -e 'has("review_clusters") and (.review_clusters | type == "object")' "$f" >/dev/null 2>&1; then
+    echo "  FAIL: missing or non-object review_clusters"
+    missing=1
+  fi
   if [[ "$missing" == "0" ]]; then
     echo "  OK"
   else
@@ -427,6 +465,7 @@ if [[ -f "$TARGET" ]]; then
     agent-config.md) validate_agent_config_md "$TARGET" ;;
     scenarios.json) validate_scenarios_json "$TARGET" ;;
     state.json) validate_state_json "$TARGET" ;;
+    result.json) validate_result_json "$TARGET" ;;
     *) echo "ERROR: don't know how to validate $TARGET" >&2; exit 2 ;;
   esac
 elif [[ -d "$TARGET" ]]; then
@@ -444,12 +483,13 @@ elif [[ -d "$TARGET" ]]; then
       agent-config.md) validate_agent_config_md "$f" ;;
       scenarios.json) validate_scenarios_json "$f" ;;
       state.json) validate_state_json "$f" ;;
+      result.json) validate_result_json "$f" ;;
     esac
   done < <(find "$TARGET" \( \
     -name 'subagent-*.json' -o -name 'tests.json' -o -name 'contract.md' \
     -o -name 'plan.md' -o -name 'spec.md' -o -name 'cycle-plan.md' \
     -o -name 'agent-config.md' -o -name 'scenarios.json' \
-    -o -name 'state.json' \
+    -o -name 'state.json' -o -name 'result.json' \
     \) -type f 2>/dev/null)
 
   if [[ "$found_any" == "0" ]]; then

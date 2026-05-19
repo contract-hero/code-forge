@@ -1,25 +1,13 @@
 {
-  "description": "Forge v2 protocol enforcement — phase ordering, TDD discipline, parallel reviewer fan-out, post-cycle freeze, and auto-validate on schema artifacts.",
+  "description": "Option D — one hook rule survives: test files are read-only during a cycle's green phase. Every other former forge-guard rule was either subsumed by the cycle child's /goal condition or dropped with Phase F / contract.md / single-turn fan-out enforcement.",
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Write|Edit|Task|Agent|Bash",
+        "matcher": "Write|Edit|Bash",
         "hooks": [
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/forge-guard.mjs\" pre-tool-use",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/forge-guard.mjs\" post-tool-use",
             "timeout": 5
           }
         ]
