@@ -1,12 +1,12 @@
 ---
 name: code-forge
 description: |
-  Code Forge v0.2.0 (Option D) — multi-agent build system driven by
-  recursive `/goal` sessions. An outer `claude -p /goal` session reads
-  spec.md and spawns one `claude -p /goal` per cycle; each cycle child
-  runs best-of-N implementer workers and configurable dimensional
-  reviewers (count + model + dimensions picked in spec.md). One hook
-  survives — test files are read-only during green phase. Use when:
+  Multi-agent build system driven by recursive `/goal` orchestration. You
+  are the orchestrator — this skill drives Phase 0 (claudex), Phase 1
+  (planner authors spec.md with all required blocks), then spawns one
+  `claude -p /goal` per cycle. Each cycle child runs best-of-N implementer
+  workers and configurable dimensional reviewers. One PreToolUse hook
+  keeps test files read-only during green. Use when:
   (1) the user invokes `/forge`,
   (2) the user wants to start a new PoC/MVP from a brief description,
   (3) the user wants a structured multi-cycle build with TDD discipline
@@ -26,127 +26,175 @@ author: alilloig
 version: 0.2.0
 ---
 
-# Code Forge — `/goal`-recursive orchestrator
+# Code Forge
 
-**`/forge` is just a thin launcher.** The real entry point is
-`scripts/forge.sh`, which spawns the **outer Claude session** with an
-active `/goal` whose condition is *"every cycle in spec.md ## Cycle Plan
-has produced a result.json status: pass."* That outer session is the
-orchestrator.
+You are the **outer orchestrator** for Code Forge. `/forge` has just been
+invoked with the user's task description. Drive the protocol in this
+interactive session: author the spec, then loop over cycles spawning
+`claude -p /goal` per cycle.
 
-Read `docs/goal-integration.md` for the full protocol. This skill file
-is a high-level map.
+**Lazy prompt:** $ARGUMENTS
 
-## The two nested goal sessions
+Parse flags from `$ARGUMENTS` (strip them before passing the description
+to Phase 0):
+- `--quick` — skip Phase 0; use the description verbatim as `plan.md`.
+- `--light` — skip the optional Codex G2.5 gate. Keeps G2.a / G2.b.
+- `--resume` — allow reuse of an existing `.forge/` directory.
 
+## Pre-flight
+
+Before any phase work:
+
+1. **Claude version**. Run `claude --version`. Require **v2.1.139+**
+   (the minimum that supports `/goal`). On a lower version, halt with a
+   clear error message — the per-cycle children depend on `/goal`.
+2. **Stale `.forge/` check**. If `.forge/state.json` already exists and
+   the user did not pass `--resume`, ask with `AskUserQuestion` whether
+   to:
+   - Resume the existing run (treat as if `--resume` was passed).
+   - Wipe `.forge/` and start fresh.
+   - Abort.
+3. **`mkdir -p .forge/`** if it doesn't exist.
+
+## Phase 0 — Plan
+
+Skip if `--quick` was passed; in that case write the lazy prompt
+verbatim into `.forge/plan.md`.
+
+Otherwise, invoke the `codex-bridge:claudex` skill on the lazy prompt.
+It runs multi-round Claude ↔ Codex refinement and lands a refined plan
+in plan mode. Capture the refined prompt as `.forge/plan.md`.
+
+Validate: `bash ${CLAUDE_PLUGIN_ROOT}/scripts/cycle-validate.sh .forge/plan.md`.
+
+## Phase 1 — Spec & e2e
+
+Dispatch the **`forge-planner`** subagent
+(`subagent_type: "code-forge:forge-planner"`) with `.forge/plan.md` as
+input. The planner:
+
+- Authors `.forge/spec.md` with all required blocks (Vision, Acceptance
+  Criteria, Architecture, E2E Tests, Cycle Plan, Reviewer Config). See
+  `templates/spec.md.template`.
+- Runs internal Codex iteration gates (G2.a spec ↔ plan, G2.b spec ↔
+  e2e, optionally G2.5 cycle-plan ↔ spec unless `--light`).
+- Runs the interactive **Phase 1.5 Reviewer Config sub-step**
+  (model + dimensions via `AskUserQuestion`).
+- Emits `.forge/agent-config.md` for routing hints.
+- **Mirrors each cycle's `goal_condition`** from `spec.md ## Cycle Plan`
+  into `state.json.cycles[<id>].goal_condition` so the cycle loop can
+  read it via `jq`.
+
+Wait for the planner subagent to complete. Validate:
+
+```bash
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/cycle-validate.sh .forge/spec.md
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/cycle-validate.sh .forge/agent-config.md
 ```
-top:   claude -p "/goal <outer condition>"    ← spawned by scripts/forge.sh
-         │
-         ▼ (outer Claude reads spec, picks next cycle, spawns child)
-cycle: claude -p "/goal <per-cycle condition>"  ← spawned via Bash
-         │
-         ▼ (cycle child: tests → red → 6 workers → reviewers → consolidate)
-       result.json   ← outer reads, narrates "cycle X status:pass"
-```
 
-`/goal` is one-goal-per-session. Session boundaries sidestep the
-nested-goal limit: each `claude -p` is a fresh session with its own
-evaluator (Haiku by default).
+## Cycle loop
 
-## Phases
+Iterate over cycles in `.forge/spec.md ## Cycle Plan` order. For each
+cycle id, in sequence:
 
-**Pre-cycle** (outer Claude drives these in its own session):
+1. **Skip-if-done.** Read `.forge/state.json`. If
+   `cycles[<id>].status == "pass"`, skip to the next cycle.
+2. **Mark in-progress.** Update `state.json`:
+   `current_cycle = "<id>"`, `cycles[<id>].status = "in_progress"`,
+   `cycles[<id>].started_at = <now>`.
+3. **Read the cycle's `goal_condition`** from state.json (the planner
+   mirrored it there at Phase 1).
+4. **Spawn the cycle child** via Bash:
 
-| Phase | Owner | Output | Codex gates |
-|---|---|---|---|
-| 0 — Plan | wraps `codex-bridge:claudex` on the lazy prompt | `.forge/plan.md` | G1 (intrinsic to claudex) |
-| 1 — Spec & e2e | dispatches `forge-planner` | `.forge/spec.md` (10 blocks: vision, AC, architecture, E2E Tests, Cycle Plan, /goal Conditions, Reviewer Config, Reviewer Prompt, …) + `.forge/agent-config.md` | G2.a (plan↔spec), G2.b (spec↔e2e) |
-| 1.5 — Reviewer Config | planner interactively asks model + dimensions via `AskUserQuestion` | `## Reviewer Config` block in spec.md | — |
-| 2 — Cycle Plan | planner internal step (within the same dispatch as Phase 1) | `## Cycle Plan` block in spec.md | G2.5 (optional in `--light`) |
+   ```bash
+   claude -p "/goal ${CYCLE_GOAL}" \
+     --add-dir .forge \
+     --add-dir <files_affected from spec.md cycle plan entry>
+   ```
 
-`--quick` skips Phase 0.
+   `claude -p` runs to completion (the per-cycle child's `/goal`
+   eventually clears or times out). Capture the exit code.
+5. **Read `cycles/<id>/result.json`**.
+   - If the file exists and `status == "pass"`: narrate
+     "Cycle `<id>` complete with status=pass" in transcript. Update
+     `state.json.cycles[<id>].status = "pass"` and continue to the
+     next cycle.
+   - If the file exists and `status == "fail"`: surface the failure to
+     the user (cite `cycles/<id>/review.md` for the cluster summary).
+     Update `state.json.cycles[<id>].status = "fail"`. **Halt the
+     loop** — do not auto-continue past a failed cycle.
+   - If the file does not exist (cycle child crashed before writing
+     it): synthesize a `result.json` with `status: "fail"`,
+     `summary: "cycle child crashed (exit N) before writing result.json"`.
+     Surface to user. Halt the loop.
 
-**Per cycle** (each cycle is its own `claude -p /goal` child):
+Each cycle child has its own `/goal` condition and its own Haiku
+evaluator; this skill (in the user's interactive session) only manages
+the cycle loop and cycle-child spawning.
 
-1. test-author writes `tests.json` + the actual test files.
-2. `cycle-tests-pass.sh red` proves tests fail correctly.
-3. State `phase: green` — forge-guard's test-immutability rule activates.
-4. Cycle child dispatches N=6 implementer-workers in a single parallel
-   turn. Each writes a candidate under `cycles/<id>/green/candidates/`.
-5. Cycle child scores candidates (LOC + files + complexity), picks the
-   simplest passer, applies to repo.
-6. Cycle child dispatches N reviewers in a single parallel turn (count,
-   model, and per-reviewer dimension all come from `spec.md ## Reviewer
-   Config`).
-7. Cycle child dispatches `forge-consolidator` to cluster + verify +
-   write `review.md`.
-8. Cycle child writes `cycles/<id>/result.json { status: pass | fail,
-   ... }`.
+## Done
 
-The `/goal` evaluator on the cycle child reads transcript and verdicts
-"yes" once `result.json status: pass` + `review.md` shows 0 critical
-clusters.
+When every cycle in the plan has `status: "pass"`:
 
-## Agents
+- Print a summary citing each cycle's `result.json` summary and
+  `review.md` path.
+- Note any high/medium findings the user may want to address even
+  though the cycle passed (critical=0 is the gate; non-criticals can
+  still be worth a follow-up).
 
-All dispatchable subagents (Option D dropped both procedure manuals —
-`forge-orchestrator` and `implementer` — the outer goal session
-and the cycle child do their work inline):
+If the loop halted on a failure, surface the failing cycle's
+`review.md` and tell the user how to investigate + re-invoke `/forge`
+with `--resume` after addressing the issue.
 
-- `forge-planner` — Phase 1 spec authoring (incl. Phase 1.5 interactive
-  Reviewer Config sub-step).
-- `forge-codebase-explorer` — exploration prompts for extension tasks.
-- `forge-test-author` — `tests.json` + actual test files; proves they
-  fail at red.
-- `forge-implementer-worker` — single best-of-N candidate (model from
-  `## Reviewer Config` defaults to sonnet).
-- `forge-reviewer` — generic dimensional reviewer parameterized by the
-  prompt (no env vars in Option D); the cycle child instantiates one
-  reviewer per dimension in `## Reviewer Config`.
-- `forge-consolidator` — clusters reviewer findings inline (no
-  `_consolidated.json` intermediate in Option D), verifies critical/high
-  against source, writes `review.md`.
+## Subagents (dispatchable from this session)
 
-When you dispatch from inside a cycle child session, `subagent_type` is
-always the plugin-namespaced form: `code-forge:forge-planner`,
-`code-forge:forge-implementer-worker`, etc.
+When you call the `Agent` tool, `subagent_type` is always the
+plugin-namespaced form. See `agents/<name>.md` for each role's prompt
+and I/O contract:
+
+- `code-forge:forge-planner` — Phase 1 spec authoring (incl. Phase 1.5
+  interactive Reviewer Config sub-step).
+- `code-forge:forge-test-author` — `tests.json` + actual test files.
+- `code-forge:forge-implementer-worker` — single best-of-N candidate
+  (model from spec's Reviewer Config defaults to sonnet).
+- `code-forge:forge-reviewer` — generic dimensional reviewer
+  (parameterized by the assigned dimension passed in the prompt).
+- `code-forge:forge-consolidator` — clusters reviewer findings inline,
+  verifies critical/high against source, writes `review.md`.
+
+The cycle child spawns these subagents itself; this skill only spawns
+the cycle child via `claude -p /goal`.
 
 ## Scripts
 
 `${CLAUDE_PLUGIN_ROOT}/scripts/`:
 
-| Script | Use |
-|---|---|
-| `forge.sh <desc> [--quick] [--light]` | Top-level launcher. Spawns the outer `/goal` session. |
-| `cycle-init.sh <cycle-dir>` | Scaffold a cycle dir with `tests.json`, `reviewers/`, `green/candidates/`. |
-| `cycle-validate.sh <path>` | Schema validator for `plan.md`, `spec.md`, `tests.json`, `subagent-*.json`, `agent-config.md`, `state.json`, `result.json`. |
-| `cycle-tests-pass.sh red\|green <cycle-dir> -- <test-cmd>` | Run the project's test command, write `red.log` / `green.log` + JSON metadata, **invert** exit code for red phase. |
-| `forge-status.sh [<forge-dir>]` | Human-readable dashboard. Reads `.forge/state.json` + each cycle's `result.json`. |
-| `deploy.sh [--dry-run\|--check]` | Sync the repo's plugin tree to `~/.claude/code-forge/`. |
+- `cycle-init.sh <cycle-dir>` — scaffold a cycle directory.
+- `cycle-validate.sh <path>` — schema validator for every artifact
+  (plan.md, spec.md, tests.json, subagent-*.json, agent-config.md,
+  state.json, result.json).
+- `cycle-tests-pass.sh red|green <cycle-dir> -- <test-cmd>` — red/green
+  truth gate. Inverts exit code for red phase so tautological tests
+  fail the gate.
+- `forge-status.sh [<forge-dir>]` — human-readable dashboard. The user
+  can run it anytime to inspect a partial run.
 
-Dropped in Option D: `cycle-pass.sh` (replaced by `result.json status`),
-`cycle-coverage.sh` (no coverage matrix — "list IS the count"),
-`cycle-e2e-pass.sh` (no Phase F), `cycle-consolidate.mjs` (consolidator
-clusters inline), `e2e-extract.sh` (e2e baked into final cycle's tests).
+## Hook (one rule)
 
-## Hook
+`hooks/forge-guard.mjs` blocks Edit/Write/Bash writes that would weaken
+the test suite during green phase. Coverage spans the test_file paths,
+the `.forge/state.json` + `.forge/cycles/<id>/tests.json` anchors
+themselves, and an extensive Bash side-door regex (sed -i GNU + BSD,
+perl/ruby/awk in-place, cp/mv/install with -t form, dd, truncate,
+ln -sf, rm, plus sh -c / bash -c / eval / here-string invocations
+referencing those paths). Fail-closed on any internal error.
 
-`hooks/forge-guard.mjs` keeps **one rule only**: test files are
-read-only during green phase. Edit/Write to a `test_file` path is
-blocked; Bash file-writes (redirects, cp/mv, sed -i) targeting the same
-paths are blocked too (closes the shell side door). Every other former
-rule (contract precedence, single-turn fan-out, post-cycle freeze,
-specialist routing, schema auto-validate, advisory phase ordering,
-Codex-gate presence advisory) was dropped — those concerns are now
-handled by the cycle child's `/goal` condition + procedure.
+Hooks must be enabled (`disableAllHooks: false` in settings). Without
+this hook, `/goal "tests pass"` would happily rewrite the tests.
 
-`/goal` requires the hook subsystem (`disableAllHooks=false` and
-`allowManagedHooksOnly` unset). `forge.sh` does **not** check this —
-surface the error if it appears at runtime.
+## State schema
 
-## State
-
-`.forge/state.json` (Option D schema, simpler than v0.1.0):
+`.forge/state.json`:
 
 ```json
 {
@@ -156,24 +204,26 @@ surface the error if it appears at runtime.
   "light_mode": false,
   "quick_mode": false,
   "cycles": {
-    "C1": { "status": "in_progress", "started_at": "..." },
-    "C2": { "status": "pending" }
+    "C1": {
+      "status": "in_progress",
+      "started_at": "...",
+      "goal_condition": "cycles/C1/result.json exists with status: pass AND review.md has 0 critical clusters, or stop after 30 turns"
+    },
+    "C2": { "status": "pending", "goal_condition": "..." }
   }
 }
 ```
 
-The cycle child writes `current_cycle` + `phase` (so forge-guard's
-green-phase block keys correctly). The outer Claude updates
-`cycles[<id>].status` after reading each child's `result.json`.
+Writers:
+- This skill seeds the initial document and updates `current_cycle` +
+  `cycles[<id>].status` between cycle spawns.
+- The planner mirrors each cycle's `goal_condition` after Phase 1.
+- The cycle child writes `phase` and reads `goal_condition`.
 
 ## Where to look next
 
-- `docs/goal-integration.md` — full outer + cycle-child procedure.
+- `docs/goal-integration.md` — narrative protocol (this skill + cycle
+  child procedures).
 - `templates/spec.md.template` — the 10-block skeleton planner fills in.
-- `agents/<name>.md` — per-agent prompt + I/O contract.
+- `agents/<name>.md` — per-agent I/O contract.
 - `hooks/forge-guard.mjs` — the surviving rule.
-- `tests/smoke.sh` — plugin self-test.
-
-The protocol is intentionally short. Most of code-forge in Option D
-lives in spec.md (the cycle plan + /goal conditions + reviewer config),
-not in this file.

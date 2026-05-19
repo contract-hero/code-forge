@@ -397,8 +397,8 @@
       <!-- User invocation -->
       <rect x="20" y="20" width="200" height="60" rx="6" fill="#eef2ff" stroke="#1e3a8a"/>
       <text x="120" y="42" text-anchor="middle" font-size="13" font-weight="600" fill="#1e3a8a">User invocation</text>
-      <text x="120" y="60" text-anchor="middle" font-size="11" fill="#1a1a1a">bash scripts/forge.sh</text>
-      <text x="120" y="74" text-anchor="middle" font-size="11" fill="#1a1a1a">"task description"</text>
+      <text x="120" y="60" text-anchor="middle" font-size="11" fill="#1a1a1a">/forge "task description"</text>
+      <text x="120" y="74" text-anchor="middle" font-size="11" fill="#1a1a1a">(from Claude Code)</text>
 
       <line x1="223" y1="50" x2="248" y2="50" stroke="#15803d" stroke-width="1.8" marker-end="url(#arr-flow)"/>
 
@@ -718,27 +718,26 @@ dimensions:
 <section id="quick-start">
   <h2><span class="num">07</span>Quick start</h2>
 
-  <h3>From a terminal</h3>
-  <pre><code># Top-level launcher (or invoke /forge from inside Claude Code)
-bash scripts/forge.sh "Build a CLI that counts source lines"
+  <p>Code Forge is a Claude Code plugin. There's one entry point:</p>
 
-# Skip Phase 0 claudex refinement for trivial tasks
-bash scripts/forge.sh "Add a --json flag to my CLI" --quick
+  <pre><code>/forge "Build a CLI that counts source lines"
 
-# Skip the optional G2.5 Codex gate (cost savings)
-bash scripts/forge.sh "&lt;description&gt;" --light
+# Skip Phase 0 (Codex-mediated planning refinement) for trivial tasks:
+/forge "Add a --json flag to my CLI" --quick
 
-# Resume a previous run (allows reuse of an existing .forge/)
-bash scripts/forge.sh "&lt;description&gt;" --resume</code></pre>
+# Skip the optional G2.5 Codex gate (cost savings):
+/forge "&lt;description&gt;" --light
 
-  <h3>From Claude Code</h3>
-  <pre><code>/forge "Build a real-time task management app with WebSocket collaboration"</code></pre>
+# Resume a run that left a partial .forge/ behind:
+/forge "&lt;description&gt;" --resume</code></pre>
+
+  <p>The <code>code-forge</code> skill drives the whole run in your interactive session (Phase 0 → Phase 1 → cycle loop), spawning one <code>claude -p /goal</code> child per cycle for the autonomous bits.</p>
 
   <h3>Requirements</h3>
   <ul>
-    <li><strong>Claude Code v2.1.139+</strong> — <code>/goal</code> is required.</li>
-    <li><strong><code>codex-bridge</code> plugin</strong> — provides the Codex MCP tools used by G2.a / G2.b / G2.5.</li>
-    <li><strong>Hooks enabled</strong> — <code>disableAllHooks: false</code> in settings (the default). Rule 5 is the only anti-cheat invariant left; if it's disabled, <code>/goal "tests pass"</code> will reliably weaken tests.</li>
+    <li><strong>Claude Code v2.1.139+</strong> — <code>/goal</code> is load-bearing.</li>
+    <li><strong><code>codex-bridge</code> plugin</strong> — provides the Codex MCP tools used by the planner's G2.a / G2.b / G2.5 cross-checks.</li>
+    <li><strong>Hooks enabled</strong> — <code>disableAllHooks: false</code> in settings (the default). The one anti-cheat invariant is a <code>PreToolUse</code> hook; if it's disabled, <code>/goal "tests pass"</code> will reliably weaken tests.</li>
     <li><strong><code>jq</code> + <code>node</code></strong> in <code>PATH</code> — used by <code>cycle-validate.sh</code> and <code>forge-guard.mjs</code>.</li>
   </ul>
 </section>
