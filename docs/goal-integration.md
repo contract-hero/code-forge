@@ -148,18 +148,42 @@ files. The cycle child only orchestrates:
 
 ### Internal retry behavior (the `/goal` does this for free)
 
-If the review has critical clusters, `result.json` gets `status: fail`.
-The evaluator sees `status: fail` in transcript and verdicts "no" —
-Claude re-enters the cycle child's procedure. The child can either:
+If the review has critical clusters — or no candidate passed the tests at
+all — `result.json` gets `status: fail`. The evaluator sees `status: fail`
+in transcript and verdicts "no", so Claude re-enters the cycle child's
+procedure. The child can either:
 
-- **Re-dispatch workers** with the reviewer feedback as additional
-  context (green retry), or
+- **Re-dispatch workers** for another best-of-N round (green retry), or
 - **Re-dispatch a single repair worker** targeting just the critical
   files.
 
 The cycle child's main session decides which path to take based on the
 review's failure mode (e.g., universal failure → re-dispatch all
 workers; single-file critical → repair worker).
+
+#### Failed-Approaches Carry-Forward on retry (optional)
+
+Before a green *retry* round, the cycle child distills the round that just
+failed into `cycles/<id>/failures.md` (appending a `## Round N` section —
+cumulative across the cycle). It does this **inline**: it already holds
+the per-candidate test results, the `blocked:true` manifests, and
+`review.md` in context, so no separate distiller agent is dispatched.
+
+How many workers see that file is governed by the optional
+`## Worker Config` block in `spec.md`:
+
+- `hinted_workers: 0` (the default when the block is absent) -> every retry
+  worker is **pristine**, exactly as before. The carry-forward is dormant.
+- `hinted_workers: K` (1 <= K < count) -> the cycle child dispatches
+  `count - K` pristine workers plus `K` **hinted** workers whose dispatch
+  prompt names `failures.md` and instructs them to avoid the recorded
+  dead-ends. Round 1 is always all-pristine (no failures exist yet).
+
+Keeping the majority pristine is the whole point: if all retry workers saw
+the failure history they would re-correlate and best-of-N would collapse
+to best-of-1. The hinted minority is insurance against repeating a known
+dead-end without sacrificing the pool's diversity. Full rationale +
+artifact format: `failed-approaches-carryforward.md`.
 
 The `/goal` re-prompt loop handles the "try again" mechanic. No retry
 counter to maintain; the `or stop after K_child turns` clause is the

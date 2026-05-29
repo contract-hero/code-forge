@@ -114,6 +114,24 @@ dimensions:
 - Want 2 security reviewers? List `security` twice.
 - `model` is passed through to each reviewer's `Agent` dispatch.
 
+## Worker Config
+
+> **Optional block.** Absent => `count: 6, hinted_workers: 0`, which is
+> identical to pre-FACF behavior (every best-of-N worker pristine, every
+> round). See `docs/failed-approaches-carryforward.md`.
+
+```yaml
+count: 6            # best-of-N implementer pool size per cycle
+hinted_workers: 0   # of `count`, how many receive cycles/<id>/failures.md
+                    # on a RETRY round (round >= 2). 0 = always pristine.
+```
+
+- `count` was previously the implicit "default 6".
+- `hinted_workers` only takes effect on **retry** rounds — round 1 has no
+  failures yet, so all workers are pristine regardless.
+- Constraint: `hinted_workers < count` (always keep >= 1 pristine worker,
+  or the pool re-correlates and the carry-forward defeats itself).
+
 ---
 
 ## Notes for the outer goal session

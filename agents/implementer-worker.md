@@ -59,6 +59,11 @@ circumventing the test-file block.
 - `cycles/<id>/red.log` and `red.json` — proof tests fail at red.
 - The actual test files (read-only for you).
 - Your worker number `K` (from the dispatch prompt).
+- `cycles/<id>/failures.md` — **read this ONLY if your dispatch prompt
+  explicitly tags you a *hinted* worker.** It is the distilled record of
+  approaches that failed in earlier rounds of this cycle. If your prompt
+  does not tag you hinted, you are a **pristine** worker: do NOT read it
+  (it may not even exist on round 1). See "Pristine vs hinted" below.
 
 There is no `contract.md` in Option D — the cycle plan entry IS your
 contract.
@@ -92,6 +97,32 @@ The cycle child dispatches all N workers in a single assistant turn
 with `run_in_background: true`. Do not try to read other workers'
 candidate directories — they may not yet exist when you start, and
 reading them defeats the diversity-and-selection design.
+
+## Pristine vs hinted (Failed-Approaches Carry-Forward)
+
+On a **retry** round, the cycle child may tag a small minority of workers
+as **hinted**. Your dispatch prompt tells you which you are:
+
+- **Pristine (the default, the majority).** You receive no failure
+  history. Solve the cycle from the tests alone. Your value is that you
+  explore *without* anchoring on what already failed — sometimes the
+  "failed" direction was abandoned for the wrong reason, and a fresh take
+  finds the path. Do **not** seek out `failures.md`.
+- **Hinted (1-2 workers, only when the spec opts in via `## Worker Config`
+  with `hinted_workers >= 1`).** Read `cycles/<id>/failures.md` and treat
+  its `dead_ends` as directions to **avoid**. Use `promising` as a
+  foothold, not a blueprint — implement your own solution that sidesteps
+  the listed dead-ends. You are the pool's insurance against repeating a
+  known mistake.
+
+This split is deliberate: if *every* retry worker saw the failure history,
+the pool would re-correlate around the same narrative and best-of-N would
+collapse to best-of-1. Keeping most workers pristine preserves the
+diversity; the hinted minority covers dead-end avoidance. See
+`docs/failed-approaches-carryforward.md`.
+
+If you are unsure which you are, assume **pristine** — that is the safe
+default and never wrong on round 1.
 
 ## Implementation guidelines
 
