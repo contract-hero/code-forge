@@ -124,7 +124,20 @@ function consolidatorPrompt({ cycleDir, specPath, realizedCount, dropped }) {
 
 // --- Orchestration ---
 
-const { cycleDir, specPath, dimensions, model } = args
+// `args` should arrive as an object, but the Workflow tool may hand it over
+// JSON-encoded (a documented footgun). Tolerate both, then validate shape so a
+// bad invocation fails loud and early instead of deep in a .map().
+const input = typeof args === 'string' ? JSON.parse(args) : args
+if (!input || typeof input !== 'object') {
+  throw new Error(`review-stage: args must be an object, got ${typeof args}`)
+}
+const { cycleDir, specPath, dimensions, model } = input
+if (!Array.isArray(dimensions) || dimensions.length === 0) {
+  throw new Error(`review-stage: args.dimensions must be a non-empty array (got ${JSON.stringify(dimensions)})`)
+}
+if (!cycleDir || !specPath) {
+  throw new Error('review-stage: args.cycleDir and args.specPath are required')
+}
 
 phase('Review')
 const results = await parallel(dimensions.map((dimension, i) => () =>

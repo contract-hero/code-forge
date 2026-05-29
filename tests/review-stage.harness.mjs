@@ -119,19 +119,39 @@ const ok = (name) => { console.log(`  ok  ${name}`); pass++ }
   ok('dropout: failed reviewer -> realizedCount + dropped passed to consolidator')
 }
 
-// --- Test 3: meta is a well-formed pure literal ---
+// --- Test 3: empty dimensions is a misconfig -> fail loud, dispatch nothing ---
 {
-  // Re-run but capture meta by short-circuiting agents to throw after first.
-  // Simpler: parse meta via a minimal runner that returns the sentinel before
-  // the orchestration by feeding zero dimensions.
   const s = makeStubs()
   const runner = buildRunner()
-  const result = await runner(s.agent, s.parallel, s.phase, s.log,
-    { ...ARGS, dimensions: [] })
-  // zero dimensions -> parallel([]) -> realized 0 -> consolidator still runs once
-  assert.equal(s.calls.reviewer.length, 0, 'no reviewers for zero dimensions')
-  assert.equal(s.calls.consolidator.length, 1, 'consolidator still runs')
-  ok('meta parses; zero-dimension edge dispatches consolidator only')
+  let threw = false
+  try { await runner(s.agent, s.parallel, s.phase, s.log, { ...ARGS, dimensions: [] }) }
+  catch { threw = true }
+  assert.ok(threw, 'empty dimensions throws')
+  assert.equal(s.calls.reviewer.length, 0, 'no reviewers dispatched on empty dimensions')
+  assert.equal(s.calls.consolidator.length, 0, 'no consolidator dispatched on empty dimensions')
+  ok('empty dimensions throws early, dispatches nothing')
+}
+
+// --- Test 4: args delivered as a JSON STRING (documented Workflow footgun) ---
+{
+  const s = makeStubs()
+  const runner = buildRunner()
+  const result = await runner(s.agent, s.parallel, s.phase, s.log, JSON.stringify({ ...ARGS }))
+  assert.equal(s.calls.reviewer.length, 3, 'string args: 3 reviewers dispatched')
+  assert.equal(result.reviewMdPath, s.consolidatorSummary.reviewMdPath, 'string args: summary returned')
+  ok('string-encoded args are tolerated (defensive JSON.parse)')
+}
+
+// --- Test 5: malformed args fail loud and early ---
+{
+  const s = makeStubs()
+  const runner = buildRunner()
+  let threw = false
+  try { await runner(s.agent, s.parallel, s.phase, s.log, { ...ARGS, dimensions: undefined }) }
+  catch { threw = true }
+  assert.ok(threw, 'missing dimensions throws a clear error before dispatch')
+  assert.equal(s.calls.reviewer.length, 0, 'no reviewers dispatched on bad args')
+  ok('bad args (no dimensions) throws early, dispatches nothing')
 }
 
 console.log(`\nreview-stage.harness: ${pass} checks passed`)
