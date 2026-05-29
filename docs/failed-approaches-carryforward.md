@@ -53,10 +53,9 @@ You get both properties at once:
   guaranteed not to repeat the known-bad approach.
 
 Because the selector downstream (tests, then reviewers) only keeps the
-*best* candidate, adding a hinted worker is pure upside: if the hint
-helps, the hinted worker wins; if it doesn't, it loses selection and
-costs nothing but tokens. The floor never matters in best-of-N — only the
-ceiling.
+*best* candidate, adding a hinted worker is pure upside: if the hint helps
+it wins, if not it loses selection. In best-of-N only the ceiling matters,
+never the floor.
 
 ## The artifact: `failures.md`
 
@@ -85,30 +84,31 @@ machine-parseable summary the next step can `jq`/grep):
 # Failed approaches — cycle C2
 
 ## Round 1
-**Outcome:** no candidate passed (4 failed tests, 2 blocked).
+**Outcome:** no candidate passed (2 failed tests, 2 blocked).
 
 ### Dead-ends (do NOT repeat these)
 - **D1** — Stored the index as a plain `Array` and linear-scanned on
   lookup. Caused `T-003 lookup-is-O(1)` to time out. (workers 1,3,5)
-- **D2** — Two workers blocked: "spec doesn't say whether duplicate keys
-  overwrite or reject." (workers 2,6)
+
+### Open questions (NOT dead-ends — a spec gap to surface)
+- Duplicate-key semantics unspecified: 2 workers blocked rather than
+  guess. Escalate; don't keep retrying on an ambiguity.
 
 ### What's still open / promising
 - worker-4 passed 7/9 tests with a Map-backed store; failed only on the
-  duplicate-key case (the D2 ambiguity). A Map approach is likely correct
-  once the duplicate-key rule is pinned.
+  duplicate-key case. A Map approach is likely correct once the rule is pinned.
 
 ```facf
 round: 1
 outcome: no-pass            # no-pass | critical-review
 failed_tests: [T-003, T-007]
-blocked_reasons:
+blocked_reasons:            # raw: what workers reported when blocked:true
   - "duplicate-key semantics unspecified"
-dead_ends:
+dead_ends:                  # wrong directions to avoid next round
   - id: D1
     summary: "Array + linear scan -> O(n) lookup, times out T-003"
-  - id: D2
-    summary: "duplicate-key behavior ambiguous; 2 workers blocked"
+open_questions:             # distilled spec-gaps (NOT dead-ends); escalate
+  - "duplicate-key behavior on set() unspecified"
 promising:
   - "Map-backed store passed 7/9; only duplicate-key case open"
 ```

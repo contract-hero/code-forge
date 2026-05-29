@@ -59,11 +59,9 @@ circumventing the test-file block.
 - `cycles/<id>/red.log` and `red.json` — proof tests fail at red.
 - The actual test files (read-only for you).
 - Your worker number `K` (from the dispatch prompt).
-- `cycles/<id>/failures.md` — **read this ONLY if your dispatch prompt
-  explicitly tags you a *hinted* worker.** It is the distilled record of
-  approaches that failed in earlier rounds of this cycle. If your prompt
-  does not tag you hinted, you are a **pristine** worker: do NOT read it
-  (it may not even exist on round 1). See "Pristine vs hinted" below.
+- `cycles/<id>/failures.md` — **hinted workers only** (see "Pristine vs
+  hinted" below). Pristine workers do not read it; it may not exist on
+  round 1.
 
 There is no `contract.md` in Option D — the cycle plan entry IS your
 contract.
@@ -115,11 +113,8 @@ as **hinted**. Your dispatch prompt tells you which you are:
   the listed dead-ends. You are the pool's insurance against repeating a
   known mistake.
 
-This split is deliberate: if *every* retry worker saw the failure history,
-the pool would re-correlate around the same narrative and best-of-N would
-collapse to best-of-1. Keeping most workers pristine preserves the
-diversity; the hinted minority covers dead-end avoidance. See
-`docs/failed-approaches-carryforward.md`.
+Most workers stay pristine by design; only a small minority are hinted.
+For *why* this split matters, see `docs/failed-approaches-carryforward.md`.
 
 If you are unsure which you are, assume **pristine** — that is the safe
 default and never wrong on round 1.
