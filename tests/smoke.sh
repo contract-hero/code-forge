@@ -746,6 +746,20 @@ assert "forge-status survives malformed result.json" "$?" "0"
 rm -rf "$MD_DIR"
 echo ""
 
+# --- Section 24: review-stage Workflow (PR #1) ---
+echo "Section 24: review-stage Workflow"
+
+# (a) the workflow script's orchestration logic, run headlessly via the stub
+#     harness (Workflows can't run in `claude -p`; node --check rejects the
+#     script's top-level return). This also serves as the syntax gate.
+node "${SCRIPT_DIR}/review-stage.harness.mjs" >/dev/null 2>&1
+assert "review-stage harness passes"        "$?" "0"
+
+# (b) the cycle-review fixture validates (spec + tests + reviewer findings)
+bash "${SCRIPTS}/cycle-validate.sh" "${FIXTURES}/cycle-review" >/dev/null 2>&1
+assert "cycle-review fixture validates"      "$?" "0"
+echo ""
+
 # --- Summary ---
 echo "=== Smoke summary ==="
 echo "  Passed:  $PASSED"

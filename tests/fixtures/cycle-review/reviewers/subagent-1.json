@@ -1,0 +1,28 @@
+[
+  {
+    "id": "R1-001",
+    "title": "Unvalidated numeric input path",
+    "severity": "critical",
+    "category": "security",
+    "file": "src/example.ts",
+    "line_range": "1-3",
+    "description": "add() does not validate its inputs are finite numbers.",
+    "impact": "NaN/Infinity propagation could corrupt downstream sums.",
+    "recommendation": "Guard against non-finite inputs.",
+    "evidence": "return a + b",
+    "confidence": "medium"
+  },
+  {
+    "id": "R1-002",
+    "title": "No early return for zero",
+    "severity": "low",
+    "category": "simplicity",
+    "file": "src/example.ts",
+    "line_range": "2-2",
+    "description": "Minor: comment padding adds noise.",
+    "impact": "Readability only.",
+    "recommendation": "Drop the padding comment.",
+    "evidence": "// line padding",
+    "confidence": "low"
+  }
+]
