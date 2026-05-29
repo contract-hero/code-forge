@@ -183,7 +183,8 @@ Keeping the majority pristine is the whole point: if all retry workers saw
 the failure history they would re-correlate and best-of-N would collapse
 to best-of-1. The hinted minority is insurance against repeating a known
 dead-end without sacrificing the pool's diversity. Full rationale +
-artifact format: `failed-approaches-carryforward.md`.
+artifact format: `failed-approaches-carryforward.md`; worked example:
+`failures.example.md`.
 
 The `/goal` re-prompt loop handles the "try again" mechanic. No retry
 counter to maintain; the `or stop after K_child turns` clause is the

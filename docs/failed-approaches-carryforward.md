@@ -114,6 +114,8 @@ promising:
 ```
 ````
 
+> A complete two-round worked example lives in `failures.example.md`.
+
 ### Distillation policy (what to put in — and what to leave out)
 
 The whole value of FACF lives in this policy. Too much detail and the
@@ -202,6 +204,7 @@ cycle child, paid only on rounds that actually fail.
 | File | Change |
 |---|---|
 | `docs/failed-approaches-carryforward.md` | this doc (new) |
+| `docs/failures.example.md` | worked reference example (new) |
 | `templates/spec.md.template` | add optional `## Worker Config` block |
 | `agents/implementer-worker.md` | add optional `failures.md` input + pristine/hinted rule |
 | `docs/goal-integration.md` | rewrite §"Internal retry behavior" around `failures.md` |
