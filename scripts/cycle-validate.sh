@@ -48,6 +48,10 @@ KNOWN_PROJECT_DOMAINS='["sui-dapp","walrus","seal","sui-cli"]'
 
 OVERALL=0
 
+# NOTE (PR #1): the authoritative findings gate is now FINDINGS_SCHEMA in
+# workflows/review-stage.mjs (enforced at dispatch by the review Workflow).
+# This function is retained for forge-smoke fixtures and as belt-and-suspenders
+# on persisted subagent-*.json; it is no longer the primary findings gate.
 validate_reviewer() {
   local f="$1"
   local n

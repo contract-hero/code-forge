@@ -1,0 +1,10 @@
+[
+  {
+    "id": "T-001",
+    "name": "example returns sum",
+    "behavior": "add(a,b) returns a+b for integers",
+    "kind": "unit",
+    "target_file": "src/example.ts",
+    "test_file": "tests/example.test.ts"
+  }
+]

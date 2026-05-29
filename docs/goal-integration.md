@@ -88,9 +88,8 @@ that skill is the orchestrator.
 The skill spawns:
 
 ```bash
-claude -p "/goal cycles/<id>/result.json exists with status: pass AND
-        cycles/<id>/review.md has 0 critical clusters as surfaced in
-        this transcript, or stop after K_child turns" \
+claude -p "/goal cycles/<id>/result.json exists with status: pass
+        (a candidate passed the tests), or stop after K_child turns" \
   --add-dir .forge \
   --add-dir <files_affected paths>
 ```
@@ -124,21 +123,26 @@ files. The cycle child only orchestrates:
    complexity proxy; ties to lowest worker number), apply via rsync.
    If no candidate passed, narrate the failure and let `/goal`
    re-prompt.
-7. Dispatch **N `forge-reviewer`s** in a single assistant turn (count,
-   model, and per-reviewer dimension from `spec.md ## Reviewer Config`).
-   See `agents/reviewer.md` for the dimension-to-lens map.
-8. Dispatch **`forge-consolidator`** — clusters reviewer findings
-   inline, verifies critical/high against source, writes `review.md`
-   with a machine-readable Cluster summary block. See
-   `agents/consolidator.md`.
-9. Parse `review.md`'s Cluster summary, surface the counts in
-   transcript, then write `cycles/<id>/result.json` with
-   `status: pass` if critical=0 else `fail`, plus `winner_worker`,
-   `summary`, `review_clusters`. Update state to `phase: "done"`. Exit.
+7. Write `cycles/<id>/result.json` with a **green-only** verdict:
+   `status: pass` if a candidate passed the tests (else `fail`), plus
+   `winner_worker` and `summary`. Update state to `phase: "done"`. Exit.
+
+> **Review moved to the skill (PR #1).** The reviewer fan-out + consolidation
+> are no longer run by the cycle child. They run as a Workflow
+> (`workflows/review-stage.mjs`) invoked by the `/forge` skill after this
+> child exits — a `claude -p` child cannot use the Workflow tool. The skill
+> merges the returned cluster summary into `result.json` and applies the
+> `critical > 0 -> fail` gate. See `skills/code-forge/SKILL.md`.
+>
+> **Retry-on-critical is deferred (transitional).** The child's old `/goal`
+> loop re-dispatched workers on critical findings; with review outside the
+> child, PR #1 does not auto-retry — a critical sets `result.json fail` and
+> the skill halts + surfaces. The worker-retry loop returns natively in PR #2.
 
 ### What stops the cycle child
 
-- Goal clears (status=pass + 0 critical in review).
+- Goal clears (a candidate passes the tests; review is no longer part of
+  the child's goal — the skill runs review after the child exits).
 - Turn cap (`or stop after K_child turns`) — child exits with whatever
   `result.json` it last wrote, even if `status: fail`. The skill
   surfaces the failure to the user.

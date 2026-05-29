@@ -1,0 +1,15 @@
+[
+  {
+    "id": "R2-001",
+    "title": "add() lacks input validation",
+    "severity": "high",
+    "category": "correctness",
+    "file": "src/example.ts",
+    "line_range": "1-4",
+    "description": "Same code path: inputs not checked before arithmetic.",
+    "impact": "Incorrect results for non-numeric coercions.",
+    "recommendation": "Validate inputs or constrain the type.",
+    "evidence": "return a + b",
+    "confidence": "high"
+  }
+]

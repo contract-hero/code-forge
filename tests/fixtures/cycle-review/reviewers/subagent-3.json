@@ -1,0 +1,15 @@
+[
+  {
+    "id": "R3-001",
+    "title": "Module export style",
+    "severity": "info",
+    "category": "design",
+    "file": "src/example.ts",
+    "line_range": "1-1",
+    "description": "Named export is fine; note for consistency.",
+    "impact": "None.",
+    "recommendation": "No action.",
+    "evidence": "export function add",
+    "confidence": "high"
+  }
+]

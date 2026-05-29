@@ -113,6 +113,9 @@ dimensions:
   cycle.
 - Want 2 security reviewers? List `security` twice.
 - `model` is passed through to each reviewer's `Agent` dispatch.
+- These values (dimensions + model) feed the review Workflow's args
+  (`workflows/review-stage.mjs`), invoked by the `/forge` skill after a
+  cycle's green phase.
 
 ---
 

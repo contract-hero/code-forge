@@ -33,10 +33,11 @@ Read in order:
 
 ### Step 0 — verify reviewer-input completeness
 
-Before clustering, count `subagent-*.json` files actually present in
-`cycles/<id>/reviewers/` and compare against `len(spec.md ## Reviewer
-Config.dimensions)`. If any reviewer is missing or malformed (JSON
-parse fails, root is not an array), do NOT silently continue:
+When dispatched by the review Workflow, your prompt states the **realized
+reviewer count** and the list of **dropped dimensions** (computed
+deterministically by the workflow — trust those instead of counting files).
+If any dimension was dropped, or a present `subagent-*.json` is malformed
+(JSON parse fails, root is not an array), do NOT silently continue:
 
 - Re-read the file once in case the write was partial.
 - If still bad/missing, list the dimension(s) you couldn't read in
@@ -183,9 +184,14 @@ action items: pin updates, regen scripts, etc.>
   against source>; <false positives caught>.
 ```
 
-The **Cluster summary** block is load-bearing. The cycle child reads
-explicit counts (`- critical: 0`, `- high: 2`, etc.) to set
-`result.json status`. Keep that block's format byte-stable.
+The **Cluster summary** block is load-bearing. Keep its format byte-stable.
+
+When dispatched by the review Workflow, you must ALSO **return** the
+structured object `{ critical, high, medium, low, info, reviewMdPath }` —
+the same counts as your Cluster summary block, with `reviewMdPath` set to
+`cycles/<id>/review.md`. The `/forge` skill consumes this returned object
+directly (it does not parse your markdown); the byte-stable block remains
+for humans and the forensic record.
 
 ## What you do NOT do
 

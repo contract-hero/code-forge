@@ -16,6 +16,7 @@ allowed-tools:
   - mcp__codex__codex-reply
   - AskUserQuestion
   - Agent
+  - Workflow
   - Write
   - Read
   - Edit
@@ -114,7 +115,26 @@ cycle id, in sequence:
 
    `claude -p` runs to completion (the per-cycle child's `/goal`
    eventually clears or times out). Capture the exit code.
-5. **Read `cycles/<id>/result.json`**.
+5. **Run the review Workflow, then read `cycles/<id>/result.json`.** The
+   green child wrote a *green-only* `result.json` (its `status` reflects only
+   whether a candidate passed the tests). Now run the review stage as a
+   Workflow — the child could not, because Workflows are unavailable in
+   headless `claude -p`:
+
+   ```
+   Workflow({
+     scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/review-stage.mjs",
+     args: { cycleDir: ".forge/cycles/<id>", specPath: ".forge/spec.md",
+             dimensions: <from spec.md ## Reviewer Config>,
+             model:      <from spec.md ## Reviewer Config>,
+             sourceFiles: <the cycle's files_affected> }
+   })
+   ```
+
+   Await its returned `{ critical, high, medium, low, info, reviewMdPath }`
+   and **merge it into `cycles/<id>/result.json`**: set `review_clusters`,
+   and set `status: "fail"` if `critical > 0` (otherwise keep the green
+   `status`). Then evaluate the merged result:
    - If the file exists and `status == "pass"`: narrate
      "Cycle `<id>` complete with status=pass" in transcript. Update
      `state.json.cycles[<id>].status = "pass"` and continue to the
@@ -130,7 +150,10 @@ cycle id, in sequence:
 
 Each cycle child has its own `/goal` condition and its own Haiku
 evaluator; this skill (in the user's interactive session) only manages
-the cycle loop and cycle-child spawning.
+the cycle loop and cycle-child spawning. As of PR #1 the child's `/goal`
+targets **green only** ("a candidate passes the tests"); the review +
+`critical > 0` gate is applied by the skill (step 5 above) after the child
+exits, via the review Workflow.
 
 ## Done
 
