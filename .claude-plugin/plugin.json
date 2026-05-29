@@ -1,6 +1,6 @@
 {
   "name": "code-forge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Code Forge v0.2.0 (Option D) — multi-agent build system driven by recursive /goal sessions. An outer claude -p /goal orchestrator dispatches one claude -p /goal per cycle; each cycle child runs best-of-N implementer workers (default 6) and configurable dimensional reviewers (count + model + dimensions picked in spec.md). One hook survives — test files are read-only during green phase.",
   "author": {
     "name": "alilloig"
