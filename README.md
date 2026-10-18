@@ -1,5 +1,8 @@
 # code-forge
 
+> [!IMPORTANT]
+> **code-forge is retired and this repo is archived.** [hero-forge](https://github.com/contract-hero/hero-forge) replaces it: spec, ticket, TDD and review-pipeline skills for Claude Code. Its name honours code-forge. Install `hero-forge@contract-hero` from the [Contract Hero plugin marketplace](https://github.com/contract-hero/plugin-marketplace). The text below describes the last code-forge release (0.3.1).
+
 A Claude Code plugin that turns a lazy prompt into a shippable PoC/MVP through
 recursive `/goal` orchestration, TDD-as-phase, best-of-N implementer workers,
 and configurable dimensional review.
